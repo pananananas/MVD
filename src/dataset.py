@@ -160,6 +160,8 @@ class MultiViewPairDataset(Dataset):
             'angle_diff': torch.tensor(pair['angle_diff']).float()
         }
 
+def get_image_path(sequence_id: str, frame_id: int) -> str:
+    return f"/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/co3d/{sequence_id}/frames/{frame_id}.png"
 
 def custom_collate(batch):
     """

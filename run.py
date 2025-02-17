@@ -1,17 +1,20 @@
 from src.load_co3d import analyze_dataset, CO3DDatasetLoader
 from diffusers import StableDiffusionPipeline
-from src.dataset import create_dataloaders
+from src.dataset import create_dataloaders, get_image_path
 from src.vis_co3d import CO3DVisualizer
 from src.mvd import create_mvd_pipeline
 import torch.multiprocessing as mp
 import torch.nn.functional as F
+import matplotlib.pyplot as plt
 from pathlib import Path
 from icecream import ic
 from tqdm import tqdm
 from PIL import Image
+import numpy as np
 import random
 import wandb
 import torch
+import os
 
 # wandb.init(
 #     project="mvd",
@@ -40,6 +43,15 @@ import torch
 
 # visualizer.visualize_cameras_and_pointcloud(sequence_id)
 
+SCRATCH           = os.getenv('SCRATCH', '/net/tscratch/people/plgewoj')
+HUGGINGFACE_CACHE = os.path.join(SCRATCH, 'huggingface_cache')
+os.makedirs(HUGGINGFACE_CACHE, exist_ok=True)
+os.environ['HF_HOME'] = HUGGINGFACE_CACHE
+
+# dataset_path = "/Users/ewojcik/Code/datasets/co3d/laptop"
+dataset_path = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/co3d/motorcycle"
+
+
 def train_step(batch, pipeline, optimizer, device, batch_idx=0, accumulation_steps=4, prompt="a photo of a laptop"):
     # Scale loss by accumulation steps
     loss = train_step_inner(batch, pipeline, device, prompt) / accumulation_steps
@@ -61,7 +73,7 @@ def train_step_inner(batch, pipeline, device, prompt):
     points_3d = [points.to(device) for points in batch['points_3d']]
     
     # Print shapes for debugging
-    ic(source_images.shape[0])
+    # ic(source_images.shape[0])
     
     # Tokenize and encode the prompt
     prompts = [prompt] * source_images.shape[0]
@@ -77,7 +89,7 @@ def train_step_inner(batch, pipeline, device, prompt):
     
     # Encode prompt
     text_embeddings = pipeline.text_encoder(text_input.input_ids)[0]
-    ic(text_embeddings.shape)
+    # ic(text_embeddings.shape)
     
     # Forward pass
     noise = torch.randn_like(source_images)
@@ -122,31 +134,83 @@ def train_step_inner(batch, pipeline, device, prompt):
     
     return total_loss
 
+def visualize_batch(batch, generated_images, output_dir, batch_idx):
+    """
+    Creates a visualization grid for a batch of images.
+    Args:
+        batch: Dictionary containing source_image and target_image
+        generated_images: List of generated PIL images
+        output_dir: Directory to save the visualization
+        batch_idx: Current batch index
+    """
+    batch_size = len(batch['source_image'])
+    fig, axes = plt.subplots(batch_size, 3, figsize=(15, 5*batch_size))
+    
+    # If batch_size is 1, axes will not be 2D, so we need to handle this case
+    if batch_size == 1:
+        axes = axes.reshape(1, -1)
+    
+    for i in range(batch_size):
+        # Helper function to denormalize and convert to numpy
+        def denorm(x):
+            # x is in [-1, 1], convert to [0, 1]
+            x = (x + 1) / 2
+            x = x.clamp(0, 1)
+            return x.cpu().permute(1, 2, 0).numpy()
+        
+        # Plot source image
+        source = denorm(batch['source_image'][i])
+        axes[i, 0].imshow(source)
+        axes[i, 0].set_title('Source')
+        axes[i, 0].axis('off')
+        
+        # Plot target image
+        target = denorm(batch['target_image'][i])
+        axes[i, 1].imshow(target)
+        axes[i, 1].set_title('Target')
+        axes[i, 1].axis('off')
+        
+        # Plot generated image
+        generated = np.array(generated_images[i])
+        axes[i, 2].imshow(generated)
+        axes[i, 2].set_title('Generated')
+        axes[i, 2].axis('off')
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, f'comparison_batch_{batch_idx}.png'))
+    plt.close()
+
 def save_generated_images(pipeline, batch, output_dir, batch_idx, device, prompt):
     # Create output directory if it doesn't exist
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     with torch.no_grad():
         # Generate images
+        batch_size = len(batch['source_image'])
         images = pipeline(
-            prompt=prompt,
+            prompt=[prompt] * batch_size,  # Ensure we have one prompt per image
             num_inference_steps=20,  # Lower for faster generation during training
             source_camera=batch['source_camera'],
             target_camera=batch['target_camera'],
-            points_3d=batch['points_3d']
+            points_3d=batch['points_3d'],
+            num_images_per_prompt=1,
+            output_type="np"  # Get numpy arrays directly
         ).images
         
-        # Save source, target, and generated images
+        # Create visualization
+        visualize_batch(batch, images, output_dir, batch_idx)
+        
+        # Save individual images
         for i, (source, target, generated) in enumerate(zip(batch['source_image'], batch['target_image'], images)):
-            # Convert tensors to PIL images
-            source = (source.cpu().permute(1, 2, 0) * 255).numpy().astype('uint8')
-            target = (target.cpu().permute(1, 2, 0) * 255).numpy().astype('uint8')
+            # Convert tensors to PIL images (properly denormalized)
+            source_np = ((source.cpu().permute(1, 2, 0) + 1) / 2 * 255).numpy().astype('uint8')
+            target_np = ((target.cpu().permute(1, 2, 0) + 1) / 2 * 255).numpy().astype('uint8')
             
             # Save images
-            Image.fromarray(source).save(output_dir / f'batch_{batch_idx}_sample_{i}_source.png')
-            Image.fromarray(target).save(output_dir / f'batch_{batch_idx}_sample_{i}_target.png')
-            generated.save(output_dir / f'batch_{batch_idx}_sample_{i}_generated.png')
+            Image.fromarray(source_np).save(output_dir / f'batch_{batch_idx}_sample_{i}_source.png')
+            Image.fromarray(target_np).save(output_dir / f'batch_{batch_idx}_sample_{i}_target.png')
+            Image.fromarray((generated * 255).astype('uint8')).save(output_dir / f'batch_{batch_idx}_sample_{i}_generated.png')
 
 if __name__ == '__main__':
     # Simple device selection
@@ -169,11 +233,11 @@ if __name__ == '__main__':
             # Training parameters
             "learning_rate": 0.0002,
             "epochs": 10,
-            "batch_size": 1,
+            "batch_size": 2,
             
             # Dataset parameters
-            "dataset": "CO3D-laptop",
-            "image_size": (64, 64),
+            "dataset": "CO3D-motor",
+            "image_size": (256, 256),
             "max_angle_diff": 45.0,
             "min_angle_diff": 15.0,
             "max_pairs_per_sequence": 10,
@@ -182,13 +246,13 @@ if __name__ == '__main__':
             "loss_fn": "L2",
             
             # Prompt parameters
-            "prompt": "a photo of a laptop",
+            "prompt": "a photo of a motorcycle",
         }
     )
 
 
     train_loader, val_loader = create_dataloaders(
-        data_path="/Users/ewojcik/Code/datasets/co3d/laptop",
+        data_path=dataset_path,
         batch_size=wandb.config.batch_size,
         image_size=wandb.config.image_size,
         max_angle_diff=wandb.config.max_angle_diff,
@@ -201,6 +265,7 @@ if __name__ == '__main__':
         dtype=torch.float32,                                        # TODO: use the dtype from the config
         use_memory_efficient_attention=wandb.config.use_memory_efficient_attention,
         enable_gradient_checkpointing=wandb.config.enable_gradient_checkpointing,
+        cache_dir=HUGGINGFACE_CACHE,
     )
     pipeline.to(device)
     optimizer = torch.optim.Adam(pipeline.unet.parameters(), lr=wandb.config.learning_rate)
@@ -232,19 +297,18 @@ if __name__ == '__main__':
             accumulation_steps=wandb.config.gradient_accumulation_steps,
             prompt=wandb.config.prompt
         )
-        ic(loss)
-        wandb.log({"loss": loss})
+        # ic(loss)
         
         # Save generated images every N batches
-        # if batch_idx % 10 == 0:
-        save_generated_images(
-            pipeline, 
-            batch, 
-            output_dir, 
-            batch_idx, 
-            device, 
-            wandb.config.prompt
-        )
+        if batch_idx % 10 == 0:
+            save_generated_images(
+                pipeline, 
+                batch, 
+                output_dir, 
+                batch_idx, 
+                device, 
+                wandb.config.prompt
+            )
         
         if batch_idx >= 100:  # Early stop for testing
             break

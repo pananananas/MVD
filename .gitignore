@@ -11,3 +11,4 @@ wheels/
 wandb/
 .DS_Store
 outputs/
+outputs_old/

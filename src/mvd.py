@@ -150,12 +150,19 @@ def create_mvd_pipeline(
     dtype: torch.dtype = torch.float16,
     use_memory_efficient_attention: bool = True,
     enable_gradient_checkpointing: bool = True,
+    cache_dir=None,
 ):
-    # Load standard pipeline with only supported kwargs
+    # Initialize the pipeline with cache_dir
     pipeline = StableDiffusionPipeline.from_pretrained(
         pretrained_model_name_or_path,
         torch_dtype=dtype,
+        use_memory_efficient_attention=use_memory_efficient_attention,
+        cache_dir=cache_dir,
     )
+    
+    # Disable safety checker since we're only working with motorcycle images
+    pipeline.safety_checker = None
+    pipeline.feature_extractor = None
     
     # Replace UNet with our version
     mv_unet = MultiViewUNet(
