@@ -68,12 +68,22 @@ class CO3DDatasetLoader:
             Dict zawierający dane klatki
         """
         sequence_name = frame_annotation['sequence_name']
+        
+        # Get image directory and list all image files
+        image_dir = self.base_path / sequence_name / 'images'
+        image_files = sorted(image_dir.glob('*.jpg'))  # Sort files naturally
+        
+        # Find the frame number from the index in sorted files
         frame_number = frame_annotation['frame_number']
-        frame_number = frame_number + 1
-        # Ścieżki do plików
-        image_path = self.base_path / sequence_name / 'images' / f'frame{frame_number:06d}.jpg'
-        mask_path = self.base_path / sequence_name / 'masks' / f'frame{frame_number:06d}.png'
-        depth_path = self.base_path / sequence_name / 'depth_masks' / f'frame{frame_number:06d}.png'
+        if frame_number >= len(image_files):
+            raise ValueError(f"Frame number {frame_number} out of range for sequence {sequence_name}")
+        
+        image_path = image_files[frame_number]
+        frame_basename = image_path.stem
+        
+        # Get corresponding mask and depth paths
+        mask_path = self.base_path / sequence_name / 'masks' / f"{frame_basename}.png"
+        depth_path = self.base_path / sequence_name / 'depth_masks' / f"{frame_basename}.png"
         
         # Ładowanie danych
         image = Image.open(image_path)
