@@ -36,7 +36,9 @@ class CO3DDatasetLoader:
         """
         # Znajdź wszystkie klatki dla danej sekwencji
         sequence_frames = [
-            frame for frame in self.frame_annotations
+            frame for frame in tqdm(self.frame_annotations, 
+                                  desc=f"Loading frames for sequence {sequence_id}",
+                                  leave=False)
             if frame['sequence_name'] == sequence_id
         ]
         

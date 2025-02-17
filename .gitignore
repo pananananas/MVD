@@ -10,3 +10,4 @@ wheels/
 .venv
 wandb/
 .DS_Store
+outputs/
