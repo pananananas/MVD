@@ -16,7 +16,9 @@ class MultiViewPairDataset(Dataset):
                  image_size: Tuple[int, int] = (256, 256),
                  max_angle_diff: float = 45.0,
                  min_angle_diff: float = 15.0,
-                 max_pairs_per_sequence: int = 10):
+                 max_pairs_per_sequence: int = 10,
+                 debug_mode: bool = False,
+                 debug_num_sequences: int = 2):
         """
         Dataset dla par widoków.
         
@@ -27,11 +29,14 @@ class MultiViewPairDataset(Dataset):
             max_angle_diff: Maksymalna różnica kątów między widokami (w stopniach)
             min_angle_diff: Minimalna różnica kątów między widokami (w stopniach)
             max_pairs_per_sequence: Maksymalna liczba par z jednej sekwencji
+            debug_mode: Czy używać ograniczonej liczby sekwencji do szybkiego prototypowania
+            debug_num_sequences: Liczba sekwencji do użycia w trybie debug
         """
         self.loader = loader
         self.image_size = image_size
         self.max_angle_diff = np.radians(max_angle_diff)
         self.min_angle_diff = np.radians(min_angle_diff)
+        self.debug_mode = debug_mode
         
         print(f"Initializing {split} dataset...")
         
@@ -45,6 +50,11 @@ class MultiViewPairDataset(Dataset):
         # Wybierz sekwencje z dobrą rekonstrukcją 3D
         with tqdm(desc="Filtering sequences", unit="seq") as pbar:
             self.sequences = self._filter_sequences(pbar)
+        
+        # If in debug mode, limit the number of sequences
+        if debug_mode:
+            print(f"Debug mode: Using only {debug_num_sequences} sequences")
+            self.sequences = self.sequences[:debug_num_sequences]
         
         # Podziel na train/val (80/20)
         random.seed(42)  # dla powtarzalności
@@ -222,15 +232,38 @@ def custom_collate(batch):
 def create_dataloaders(data_path: str,
                       batch_size: int = 8,
                       num_workers: int = 4,
+                      debug_mode: bool = False,
+                      debug_num_sequences: int = 2,
                       **dataset_kwargs) -> Tuple[DataLoader, DataLoader]:
     """
     Tworzy DataLoadery dla zbiorów treningowego i walidacyjnego
+    
+    Args:
+        data_path: Ścieżka do danych
+        batch_size: Rozmiar batcha
+        num_workers: Liczba workerów do ładowania danych
+        debug_mode: Czy używać ograniczonej liczby sekwencji do szybkiego prototypowania
+        debug_num_sequences: Liczba sekwencji do użycia w trybie debug
+        **dataset_kwargs: Dodatkowe argumenty dla MultiViewPairDataset
     """
     loader = CO3DDatasetLoader(data_path)
     
     # Utwórz datasety
-    train_dataset = MultiViewPairDataset(loader, split='train', **dataset_kwargs)
-    val_dataset = MultiViewPairDataset(loader, split='val', **dataset_kwargs)
+    train_dataset = MultiViewPairDataset(
+        loader, 
+        split='train',
+        debug_mode=debug_mode,
+        debug_num_sequences=debug_num_sequences,
+        **dataset_kwargs
+    )
+    
+    val_dataset = MultiViewPairDataset(
+        loader,
+        split='val',
+        debug_mode=debug_mode,
+        debug_num_sequences=debug_num_sequences,
+        **dataset_kwargs
+    )
     
     # Utwórz data loadery z custom collate function
     train_loader = DataLoader(

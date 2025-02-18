@@ -15,6 +15,16 @@
 - początkowo tylko nowe warstwy, pozostałe warstwy zostają zamrożone
 
 
+# Pomysły
+- feature matching loss
+
+
+# Modele
+- [stable-diffusion-v1-5](https://huggingface.co/Jiali/stable-diffusion-1.5)
+
+
+
+
 # Datasets
 | Dataset | Description | Access |
 |---------|-------------|--------|

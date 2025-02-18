@@ -6,6 +6,7 @@ from src.mvd import create_mvd_pipeline
 import torch.multiprocessing as mp
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+from datetime import datetime
 from pathlib import Path
 from icecream import ic
 from tqdm import tqdm
@@ -15,19 +16,6 @@ import random
 import wandb
 import torch
 import os
-
-# wandb.init(
-#     project="mvd",
-
-#     config={
-#         "learning_rate": 0.02,
-#         "architecture": "runwayml/stable-diffusion-v1-5",
-#         "dataset": "CO3D-laptop",
-#         "loss_fn": "L2",
-#         "epochs": 10,
-#     }
-# )
-
 # data_path = "/Users/ewojcik/Code/datasets/co3d/laptop"
 # model_id = wandb.config.architecture
 # sequence_id = "62_4317_10724"
@@ -182,7 +170,7 @@ def visualize_batch(batch, generated_images, output_dir, batch_idx):
 
 def save_generated_images(pipeline, batch, output_dir, batch_idx, device, prompt):
     # Create output directory if it doesn't exist
-    output_dir = Path(output_dir)
+    output_dir = Path(output_dir) / datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     with torch.no_grad():
@@ -213,10 +201,8 @@ def save_generated_images(pipeline, batch, output_dir, batch_idx, device, prompt
             Image.fromarray((generated * 255).astype('uint8')).save(output_dir / f'batch_{batch_idx}_sample_{i}_generated.png')
 
 if __name__ == '__main__':
-    # Simple device selection
-    device = torch.device("cuda" if torch.cuda.is_available() else 
-                         "mps" if torch.backends.mps.is_available() else 
-                         "cpu")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
     ic(device)
     
 
@@ -247,17 +233,24 @@ if __name__ == '__main__':
             
             # Prompt parameters
             "prompt": "a photo of a motorcycle",
+
+            # Debug parameters
+            "debug": True,
+            "debug_num_sequences": 2,
+            "debug_max_pairs": 5,
         }
     )
 
-
+    # Create dataloaders with debug mode support
     train_loader, val_loader = create_dataloaders(
         data_path=dataset_path,
         batch_size=wandb.config.batch_size,
         image_size=wandb.config.image_size,
         max_angle_diff=wandb.config.max_angle_diff,
         min_angle_diff=wandb.config.min_angle_diff,
-        max_pairs_per_sequence=wandb.config.max_pairs_per_sequence
+        max_pairs_per_sequence=wandb.config.max_pairs_per_sequence if not wandb.config.debug else wandb.config.debug_max_pairs,
+        debug_mode=wandb.config.debug,
+        debug_num_sequences=wandb.config.debug_num_sequences
     )
 
     pipeline = create_mvd_pipeline(
@@ -310,8 +303,8 @@ if __name__ == '__main__':
                 wandb.config.prompt
             )
         
-        if batch_idx >= 100:  # Early stop for testing
-            break
+        # if batch_idx >= 100:  # Early stop for testing
+        #     break
     
     wandb.finish()
 
