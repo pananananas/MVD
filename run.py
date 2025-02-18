@@ -31,7 +31,7 @@ if __name__ == '__main__':
         "gradient_accumulation_steps": 4,
         "max_grad_norm": 1.0,
         "warmup_steps": 1000,
-        "val_check_interval": 1,  # Validate every 1 of epoch
+        "val_check_interval": 0.005,  # Validate every 0.5% of epoch
         
         # Dataset parameters
         "dataset": "CO3D-motor",

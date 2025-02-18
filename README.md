@@ -1,40 +1,42 @@
 # Plan działania
 
 1. Przygotowanie danych
-- zestaw obrazów z różnych punktów widzenia
-- COLMAP do pozyskania macierzy rotacji i translacji pomiędzy poszczególnymi punktami widzenia i punktów kluczowych obiektu w 3D
+- pobranie większej ilości próbek z CO3D
+- dołożenie danych z innych datasetów
+- preprocessing:
+  - zamiast pair-wise generowanie widoków na podstawie jednej próbki
+  - generowanie kolejnych widoków na podstawie kilku próbek
+- dodanie warunkowania z użyciem SfM
 
-2. Minimalna modyfikacja modelu
-- najpierw modyfikacja tylko przekazywania informacji o kamerze
-- encoding parametrów
-- sprawdzenie czy model przyjmuje dane
+2. Modyfikacje modelu
+- Zbadanie poprawności embeddingów parametrów kamer
+- Zbadanie czy model jest w stanie generować kolejne widoki po dłuższym treningu
+- Czy CLIP jest nam potrzebny, co się stanie jak go usuniemy
 
 3. Trening 
-- na małym zbiorze danych
-- prosty loss np L2 pomiędzy wygenerowanym a prawdziwym obrazem
-- początkowo tylko nowe warstwy, pozostałe warstwy zostają zamrożone
-
-
-# Pomysły
+- multi-gpu
 - feature matching loss
+- trenowanie nie tylko nowych warstw ale fine tuning całości/LoRA adapter
 
 
-# Modele
+# Zbadane rzeczy
+Konkatenacja embeddingów kamer z promptem tekstowym nie daje dobrych wyników.
+
+
+# Użyte modele
 - [stable-diffusion-v1-5](https://huggingface.co/Jiali/stable-diffusion-1.5)
 
 
-
-# Datasets
+# Użyte datasety
 | Dataset | Description | Access |
 |---------|-------------|--------|
 | [MVImgNet](https://github.com/GAP-LAB-CUHK-SZ/MVImgNet/tree/main)     | Czekam na mail z hasłem dostępu | n |
-| [CO3D](https://ai.meta.com/datasets/co3d-downloads/)                  | Bardzo duży, mam już dostęp | y |
-| [RealEstate10K](https://google.github.io/realestate10k/download.html) | Filmy z yt, trzeba pobrać i przetworzyć | y |
+| [CO3D](https://ai.meta.com/datasets/co3d-downloads/)                  | Bardzo duży, mam już dostęp, obrazy średniej jakości | y |
+| [RealEstate10K](https://google.github.io/realestate10k/download.html) | Filmy z yt, trzeba pobrać i przetworzyć (nie koncentrują się na obiektach a przestrzeniach) | y |
 | [RTMV](https://www.cs.umd.edu/~mmeshry/projects/rtmv/)                | Obiecujący, ale link nie działa | n |
 
 
-
-# Diagram in markdown
+# Diagram test
 ```mermaid
   graph TD;
       A-->B;
