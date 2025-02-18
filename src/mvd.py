@@ -1,34 +1,96 @@
 from diffusers import StableDiffusionPipeline
 from diffusers import UNet2DConditionModel
 from typing import Optional, Dict, Any
-from icecream import ic
+import torch.nn.functional as F
 import torch.nn as nn
+import numpy as np
 import torch
 
 class CameraEncoder(nn.Module):
-    def __init__(self, output_dim: int = 768):  # 768 to standardowy wymiar embeddingu w SD
+    def __init__(self, output_dim: int = 768, max_freq: int = 10):
         super().__init__()
-        # Wejście: R (9) + T (3) = 12 parametrów
-        self.camera_encoder = nn.Sequential(
-            nn.Linear(12, 512),
+        self.output_dim = output_dim
+        self.max_freq = max_freq
+        
+        # Calculate positional encoding dimension
+        self.pos_enc_dim = (output_dim // 2) // 3  # Divide by 3 for x,y,z and by 2 for sin/cos
+        
+        # Separate encoders for rotation and translation
+        self.rotation_encoder = nn.Sequential(
+            nn.Linear(9, 512),  # Flattened rotation matrix
+            nn.LayerNorm(512),
             nn.ReLU(),
             nn.Linear(512, output_dim)
         )
+        
+        self.translation_encoder = nn.Sequential(
+            nn.Linear(output_dim, output_dim),  # Takes positional encoded translation
+            nn.LayerNorm(output_dim),
+            nn.ReLU(),
+            nn.Linear(output_dim, output_dim)
+        )
+        
+        # Final projection layer
+        self.final_projection = nn.Sequential(
+            nn.Linear(2 * output_dim, output_dim),
+            nn.LayerNorm(output_dim)
+        )
     
-    def to(self, *args, **kwargs):
-        self.device = args[0] if args else kwargs.get('device', getattr(self, 'device', None))
-        return super().to(*args, **kwargs)
+    def positional_encoding(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Sinusoidal positional encoding for translation vectors
+        Args:
+            x: tensor of shape [B, 3] containing translation vectors
+        Returns:
+            encoding of shape [B, output_dim]
+        """
+        batch_size = x.shape[0]
+        freqs = torch.exp(torch.linspace(0., np.log(self.max_freq), self.pos_enc_dim, device=x.device))
+        
+        # Expand dimensions for broadcasting
+        x_expanded = x.unsqueeze(-1)  # [B, 3, 1]
+        angles = x_expanded * freqs[None, None, :]  # [B, 3, pos_enc_dim]
+        
+        # Calculate sin and cos
+        sin_enc = torch.sin(angles)  # [B, 3, pos_enc_dim]
+        cos_enc = torch.cos(angles)  # [B, 3, pos_enc_dim]
+        
+        # Combine and reshape
+        encoding = torch.cat([sin_enc, cos_enc], dim=-1)  # [B, 3, 2*pos_enc_dim]
+        encoding = encoding.reshape(batch_size, -1)  # [B, 6*pos_enc_dim]
+        
+        # Project to desired output dimension
+        encoding = F.linear(
+            encoding,
+            torch.randn(self.output_dim, encoding.shape[-1], device=x.device) / np.sqrt(encoding.shape[-1])
+        )
+        
+        return encoding
     
     def forward(self, camera_data: Dict[str, torch.Tensor]) -> torch.Tensor:
-        # Ensure inputs are on the correct device
-        R = camera_data['R'].to(self.device)
-        T = camera_data['T'].to(self.device)
+        """
+        Process camera parameters and return combined embedding
+        Args:
+            camera_data: dict containing 'R' [B, 3, 3] and 'T' [B, 3]
+        Returns:
+            camera_embedding: [B, output_dim]
+        """
+        R = camera_data['R']
+        T = camera_data['T']
         
-        # Spłaszcz macierz R i połącz z T
-        R = R.view(R.shape[0], -1)  # [B, 9]
-        camera_params = torch.cat([R, T], dim=1)  # [B, 12]
+        # Process rotation matrix
+        R_flat = R.reshape(R.shape[0], -1)  # [B, 9]
+        rotation_embedding = self.rotation_encoder(R_flat)
         
-        return self.camera_encoder(camera_params)
+        # Process translation with positional encoding
+        translation_encoded = self.positional_encoding(T)  # [B, output_dim]
+        translation_embedding = self.translation_encoder(translation_encoded)
+        
+        # Combine embeddings
+        combined = torch.cat([rotation_embedding, translation_embedding], dim=-1)
+        camera_embedding = self.final_projection(combined)
+        
+        return camera_embedding
 
 class MultiViewUNet(nn.Module):
     def __init__(
@@ -54,18 +116,83 @@ class MultiViewUNet(nn.Module):
             self.base_unet.enable_gradient_checkpointing()
         
         # Add camera encoder
-        self.camera_encoder = CameraEncoder()
+        self.camera_encoder = CameraEncoder(output_dim=1024)  # Fixed size for positional encodings
         
-        # Get cross-attention dimension
-        cross_attention_dim = self.base_unet.config.cross_attention_dim
+        # Get channel dimensions from UNet config
+        # In Stable Diffusion, the channel dimensions double at each downsampling step
+        # Starting from block_out_channels[0]
+        down_channels = self.config.block_out_channels
+        up_channels = list(reversed(down_channels))  # Include all channels for up blocks
+        mid_channels = down_channels[-1]  # Mid block has same channels as deepest down block
         
-        # Modify projection to handle the correct dimensions
-        # The input will be concatenated text embeddings and camera embeddings
-        self.projection = nn.Linear(cross_attention_dim + 2 * cross_attention_dim, cross_attention_dim)
+        # Count actual number of blocks
+        num_down_blocks = len(self.base_unet.down_blocks)
+        num_up_blocks = len(self.base_unet.up_blocks)
+        
+        # Create modulation layers for each resolution
+        self.down_modulators = nn.ModuleList([
+            nn.Linear(1024, down_channels[min(i, len(down_channels)-1)] * 2) 
+            for i in range(num_down_blocks)
+        ])
+        self.up_modulators = nn.ModuleList([
+            nn.Linear(1024, up_channels[i] * 2)  # Use exact index since we have all channels
+            for i in range(num_up_blocks)
+        ])
+        self.mid_modulator = nn.Linear(1024, mid_channels * 2)
         
         # Add dtype and device properties
         self.dtype = self.base_unet.dtype
         self.device = self.base_unet.device
+        
+        # Hook the UNet blocks to apply modulation
+        self._register_hooks()
+    
+    def _register_hooks(self):
+        """Register forward hooks on UNet blocks to apply modulation"""
+        def get_modulation_hook(modulator):
+            def hook(module, input, output):
+                # Get the current camera embedding from the stored state
+                if not hasattr(self, 'current_camera_embedding'):
+                    return output
+                
+                # Handle tuple output case (some UNet blocks return multiple tensors)
+                if isinstance(output, tuple):
+                    hidden_states = output[0]
+                else:
+                    hidden_states = output
+                
+                # Generate scale and shift
+                modulation = modulator(self.current_camera_embedding)  # [B, C*2]
+                scale, shift = modulation.chunk(2, dim=-1)  # Each [B, C]
+                
+                # Reshape for broadcasting
+                scale = scale.view(scale.shape[0], scale.shape[1], 1, 1)  # [B, C, 1, 1]
+                shift = shift.view(shift.shape[0], shift.shape[1], 1, 1)  # [B, C, 1, 1]
+                
+                # Ensure scale and shift have the correct number of channels
+                if scale.shape[1] != hidden_states.shape[1]:
+                    raise ValueError(f"Channel dimension mismatch: scale has {scale.shape[1]} channels but hidden states has {hidden_states.shape[1]} channels")
+                
+                # Apply modulation
+                modulated_states = hidden_states * scale + shift
+                
+                # Return in the same format as input
+                if isinstance(output, tuple):
+                    return (modulated_states,) + output[1:]
+                return modulated_states
+            
+            return hook
+        
+        # Register hooks for down blocks
+        for idx, block in enumerate(self.base_unet.down_blocks):
+            block.register_forward_hook(get_modulation_hook(self.down_modulators[idx]))
+        
+        # Register hook for mid block
+        self.base_unet.mid_block.register_forward_hook(get_modulation_hook(self.mid_modulator))
+        
+        # Register hooks for up blocks
+        for idx, block in enumerate(self.base_unet.up_blocks):
+            block.register_forward_hook(get_modulation_hook(self.up_modulators[idx]))
     
     def to(self, *args, **kwargs):
         self.device = args[0] if args else kwargs.get('device', self.device)
@@ -79,22 +206,21 @@ class MultiViewUNet(nn.Module):
         sample: torch.FloatTensor,
         timestep: torch.FloatTensor,
         encoder_hidden_states: torch.FloatTensor,
-        source_camera: Dict[str, torch.Tensor] = None,
-        target_camera: Dict[str, torch.Tensor] = None,
-        points_3d: Optional[torch.FloatTensor] = None,
+        source_camera: Optional[Dict[str, torch.Tensor]] = None,
+        target_camera: Optional[Dict[str, torch.Tensor]] = None,
+        points_3d: Optional[torch.FloatTensor] = None,  # Keep for backward compatibility
         return_dict: bool = True,
         timestep_cond: Optional[torch.FloatTensor] = None,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         added_cond_kwargs: Optional[Dict[str, torch.Tensor]] = None,
     ):
-        # Move inputs to device
-        sample = sample.to(self.device)
-        timestep = timestep.to(self.device)
-        encoder_hidden_states = encoder_hidden_states.to(self.device)
+        # Move inputs to device and cast to dtype
+        sample = sample.to(device=self.device, dtype=self.dtype)
+        timestep = timestep.to(device=self.device)
+        encoder_hidden_states = encoder_hidden_states.to(device=self.device)
         
         # During inference, we might not have camera parameters
         if source_camera is None or target_camera is None:
-            # Just pass through to base UNet
             return self.base_unet(
                 sample=sample,
                 timestep=timestep,
@@ -105,45 +231,33 @@ class MultiViewUNet(nn.Module):
                 return_dict=return_dict
             )
         
-        B, S, D = encoder_hidden_states.shape
-        # ic(encoder_hidden_states.shape)  # Should be [B, 77, 768]
+        # Move camera data to device
+        source_camera = {k: v.to(self.device) for k, v in source_camera.items()}
+        target_camera = {k: v.to(self.device) for k, v in target_camera.items()}
         
         # Encode camera parameters
-        source_camera_embedding = self.camera_encoder(source_camera)  # [B, 768]
-        target_camera_embedding = self.camera_encoder(target_camera)  # [B, 768]
-        # ic(source_camera_embedding.shape)  # Should be [B, 768]
+        source_embedding = self.camera_encoder(source_camera)  # [B, 1024]
+        target_embedding = self.camera_encoder(target_camera)  # [B, 1024]
         
-        # Reshape camera embeddings to match text embeddings sequence length
-        # Make sure we're using the correct batch size from encoder_hidden_states
-        source_camera_embedding = source_camera_embedding.unsqueeze(1).expand(B, S, -1)
-        target_camera_embedding = target_camera_embedding.unsqueeze(1).expand(B, S, -1)
+        # Store the camera embedding for use in the hooks
+        # We use target embedding as we want to condition on the target view
+        self.current_camera_embedding = target_embedding
         
-        # ic(source_camera_embedding.shape)  # Should be [B, 77, 768]
-        
-        # Concatenate all embeddings along the feature dimension
-        combined_embeddings = torch.cat([
-            encoder_hidden_states,      # [B, S, D]
-            source_camera_embedding,    # [B, S, D]
-            target_camera_embedding,    # [B, S, D]
-        ], dim=-1)  # Result: [B, S, 3*D]
-        
-        # ic(combined_embeddings.shape)  # Should be [B, 77, 2304]
-        
-        # Project back to original dimension
-        enhanced_embeddings = self.projection(combined_embeddings)  # [B, S, D]
-        # ic(enhanced_embeddings.shape)  # Should be [B, 77, 768]
-        
-        # Use the enhanced embeddings in base_unet
-        return self.base_unet(
+        # Forward through base UNet
+        output = self.base_unet(
             sample=sample,
             timestep=timestep,
-            encoder_hidden_states=enhanced_embeddings,
+            encoder_hidden_states=encoder_hidden_states,
             timestep_cond=timestep_cond,
             cross_attention_kwargs=cross_attention_kwargs,
             added_cond_kwargs=added_cond_kwargs,
             return_dict=return_dict
         )
-
+        
+        # Clean up the stored embedding
+        del self.current_camera_embedding
+        
+        return output
 
 def create_mvd_pipeline(
     pretrained_model_name_or_path: str = "runwayml/stable-diffusion-v1-5",
@@ -160,7 +274,7 @@ def create_mvd_pipeline(
         cache_dir=cache_dir,
     )
     
-    # Disable safety checker since we're only working with motorcycle images
+    # Disable safety checker
     pipeline.safety_checker = None
     pipeline.feature_extractor = None
     
