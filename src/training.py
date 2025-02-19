@@ -130,7 +130,8 @@ class MVDTrainer:
             target_images=target_images,
             source_images=source_images,
             perceptual_loss_fn=self.perceptual_loss,
-            ssim_loss_fn=self.ssim
+            ssim_loss_fn=self.ssim,
+            config=self.config
         )
         
         return losses
@@ -177,12 +178,9 @@ class MVDTrainer:
                 target_np = ((target.cpu().permute(1, 2, 0) + 1) / 2 * 255).numpy().astype('uint8')
                 generated_np = (generated * 255).astype('uint8')
                 
-                # Convert numpy arrays to PIL Images
-                source_img = Image.fromarray(source_np)
-                target_img = Image.fromarray(target_np)
+                source_img    = Image.fromarray(source_np)
+                target_img    = Image.fromarray(target_np)
                 generated_img = Image.fromarray(generated_np)
-                
-                # Save images using PIL's save method
                 source_img.save(save_dir / f'batch_{batch_idx}_sample_{i}_source.png')
                 target_img.save(save_dir / f'batch_{batch_idx}_sample_{i}_target.png')
                 generated_img.save(save_dir / f'batch_{batch_idx}_sample_{i}_generated.png')
@@ -196,9 +194,19 @@ class MVDTrainer:
     
     def train(self):
         best_val_loss = float('inf')
+        global_step = 0
+        
+        # Initialize learning rate scheduler
+        num_training_steps = len(self.train_loader) * self.config['epochs']
+        scheduler = torch.optim.lr_scheduler.LinearLR(
+            self.optimizer,
+            start_factor=1.0,
+            end_factor=0.1,
+            total_iters=num_training_steps,
+        )
         
         for epoch in range(self.start_epoch, self.config['epochs']):
-            self.pipeline.unet.train()  # Set UNet to training mode
+            self.pipeline.unet.train()
             epoch_losses = []
             
             # Training loop
@@ -207,26 +215,35 @@ class MVDTrainer:
                 # Training step
                 losses = self.train_step(batch, batch_idx)
                 epoch_losses.append(losses['total_loss'].item())
+                global_step += 1
                 
                 # Update progress bar
                 progress_bar.set_postfix({
                     'loss': losses['total_loss'].item(),
-                    'avg_loss': sum(epoch_losses) / len(epoch_losses)
+                    'avg_loss': sum(epoch_losses) / len(epoch_losses),
+                    'lr': scheduler.get_last_lr()[0]
                 })
                 
                 # Log metrics
                 wandb.log({
                     f"train/{k}": v for k, v in losses.items()
                 })
+                wandb.log({
+                    'learning_rate': scheduler.get_last_lr()[0],
+                    'global_step': global_step
+                })
                 
                 # Save samples periodically
                 if batch_idx % self.config.get('sample_interval', 100) == 0:
                     self.save_generated_samples(batch, batch_idx, epoch)
+                
+                # Update learning rate
+                scheduler.step()
             
             # Validation
             val_loss = self.validation_epoch()
             wandb.log({
-                'val/loss': val_loss,
+                'val/loss': val_loss
             })
             
             # Save checkpoint if best model
@@ -237,7 +254,11 @@ class MVDTrainer:
                     self.optimizer,
                     epoch,
                     val_loss,
-                    metrics={'val_loss': val_loss}
+                    metrics={
+                        'val_loss': val_loss,
+                        'epoch': epoch,
+                        'global_step': global_step
+                    }
                 )
             
             # Early stopping check

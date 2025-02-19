@@ -36,7 +36,7 @@ def compute_geometric_consistency(generated, source, target):
     """
     return F.l1_loss(generated, target)
 
-def compute_losses(noise_pred, noise, denoised_images, target_images, source_images, perceptual_loss_fn, ssim_loss_fn):
+def compute_losses(noise_pred, noise, denoised_images, target_images, source_images, perceptual_loss_fn, ssim_loss_fn, config):
     """
     Compute all loss components for MVD training
     
@@ -48,6 +48,7 @@ def compute_losses(noise_pred, noise, denoised_images, target_images, source_ima
         source_images: Source view images
         perceptual_loss_fn: Instance of PerceptualLoss
         ssim_loss_fn: Instance of SSIM
+        config: Training configuration with loss weights
     """
     # Basic losses
     noise_loss = F.mse_loss(noise_pred[:, :3], noise)
@@ -63,13 +64,13 @@ def compute_losses(noise_pred, noise, denoised_images, target_images, source_ima
     # Geometric consistency loss
     geometric_loss = compute_geometric_consistency(denoised_images[:, :3], source_images, target_images)
     
-    # Weight the loss components
+    # Weight the loss components using config values
     total_loss = (
-        1.0 * noise_loss +
-        1.0 * recon_loss +
-        0.1 * perceptual_loss +
-        0.05 * ssim_loss +
-        0.1 * geometric_loss
+        # 1.0 * noise_loss +
+        # 1.0 * recon_loss +
+        config['perceptual_weight'] * perceptual_loss +
+        config['ssim_weight']       * ssim_loss +
+        config['geometric_weight']  * geometric_loss
     )
     
     return {

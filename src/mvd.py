@@ -266,11 +266,10 @@ def create_mvd_pipeline(
     enable_gradient_checkpointing: bool = True,
     cache_dir=None,
 ):
-    # Initialize the pipeline with cache_dir
+    # Initialize the pipeline with only the relevant parameters
     pipeline = StableDiffusionPipeline.from_pretrained(
         pretrained_model_name_or_path,
         torch_dtype=dtype,
-        use_memory_efficient_attention=use_memory_efficient_attention,
         cache_dir=cache_dir,
     )
     

@@ -27,11 +27,11 @@ if __name__ == '__main__':
         # Training parameters
         "learning_rate": 0.0002,
         "epochs": 10,
-        "batch_size": 3,
+        "batch_size": 2,
         "gradient_accumulation_steps": 4,
         "max_grad_norm": 1.0,
         "warmup_steps": 1000,
-        "val_check_interval": 0.005,  # Validate every 0.5% of epoch
+        "val_check_interval": 4,  # Will validate every 4 steps
         
         # Dataset parameters
         "dataset": "CO3D-motor",
@@ -39,6 +39,7 @@ if __name__ == '__main__':
         "max_angle_diff": 45.0,
         "min_angle_diff": 15.0,
         "max_pairs_per_sequence": 10,
+        "max_samples_per_epoch": 50,  # Limit samples per epoch
         
         # Loss parameters
         "perceptual_weight": 0.1,
@@ -48,7 +49,7 @@ if __name__ == '__main__':
         # Checkpoint parameters
         "early_stopping_patience": 20,
         "max_checkpoints": 5,
-        "sample_interval": 100,
+        "sample_interval": 10,  # Reduced to see more samples within our limited steps
         
         # Prompt parameters
         "prompt": "a photo of a motorcycle",
@@ -72,12 +73,13 @@ if __name__ == '__main__':
         min_angle_diff=config['min_angle_diff'],
         max_pairs_per_sequence=config['max_pairs_per_sequence'] if not config['debug'] else config['debug_max_pairs'],
         debug_mode=config['debug'],
-        debug_num_sequences=config['debug_num_sequences']
+        debug_num_sequences=config['debug_num_sequences'],
+        max_samples_per_epoch=config['max_samples_per_epoch']
     )
     
     pipeline = create_mvd_pipeline(
         pretrained_model_name_or_path=config['architecture'],
-        dtype=torch.float32,
+        dtype=getattr(torch, config['torch_dtype']),
         use_memory_efficient_attention=config['use_memory_efficient_attention'],
         enable_gradient_checkpointing=config['enable_gradient_checkpointing'],
         cache_dir=HUGGINGFACE_CACHE,

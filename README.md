@@ -11,13 +11,13 @@
 2. Modyfikacje modelu
 - Zbadanie poprawności embeddingów parametrów kamer
 - Zbadanie czy model jest w stanie generować kolejne widoki po dłuższym treningu
-- Czy CLIP jest nam potrzebny, co się stanie jak go usuniemy
+- Czy CLIP (embedding tekstowy) jest nam potrzebny, co się stanie jak go usuniemy i będziemy tylko warunkować na obrazach
 
 3. Trening 
 - multi-gpu
 - feature matching loss
 - trenowanie nie tylko nowych warstw ale fine tuning całości/LoRA adapter
-
+- integracja Hydra z WANDB do zarządzania konfiguracją i logowania
 
 # Zbadane rzeczy
 Konkatenacja embeddingów kamer z promptem tekstowym nie daje dobrych wyników.

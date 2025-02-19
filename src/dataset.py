@@ -1,4 +1,4 @@
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, Subset
 from src.load_co3d import CO3DDatasetLoader
 from typing import List, Tuple, Dict
 import torchvision.transforms as T
@@ -229,56 +229,81 @@ def custom_collate(batch):
         'angle_diff': torch.stack(batch_dict['angle_diff'])
     }
 
-def create_dataloaders(data_path: str,
-                      batch_size: int = 8,
-                      num_workers: int = 4,
-                      debug_mode: bool = False,
-                      debug_num_sequences: int = 2,
-                      **dataset_kwargs) -> Tuple[DataLoader, DataLoader]:
+def create_dataloaders(
+    data_path,
+    batch_size=4,
+    image_size=(256, 256),
+    max_angle_diff=45.0,
+    min_angle_diff=15.0,
+    max_pairs_per_sequence=10,
+    debug_mode=False,
+    debug_num_sequences=2,
+    debug_max_pairs=5,
+    max_samples_per_epoch=None,
+    val_split=0.1,
+    num_workers=4,
+    seed=42
+):
     """
-    Tworzy DataLoadery dla zbiorów treningowego i walidacyjnego
+    Create train and validation dataloaders
     
     Args:
-        data_path: Ścieżka do danych
-        batch_size: Rozmiar batcha
-        num_workers: Liczba workerów do ładowania danych
-        debug_mode: Czy używać ograniczonej liczby sekwencji do szybkiego prototypowania
-        debug_num_sequences: Liczba sekwencji do użycia w trybie debug
-        **dataset_kwargs: Dodatkowe argumenty dla MultiViewPairDataset
+        data_path: Path to CO3D dataset
+        batch_size: Batch size
+        image_size: Tuple of (height, width)
+        max_angle_diff: Maximum angle difference between views
+        min_angle_diff: Minimum angle difference between views
+        max_pairs_per_sequence: Maximum number of pairs to sample per sequence
+        debug_mode: Whether to run in debug mode with limited data
+        debug_num_sequences: Number of sequences to use in debug mode
+        debug_max_pairs: Maximum pairs per sequence in debug mode
+        max_samples_per_epoch: Maximum number of samples per epoch (if None, use all)
+        val_split: Fraction of data to use for validation
+        num_workers: Number of workers for data loading
+        seed: Random seed
     """
-    loader = CO3DDatasetLoader(data_path)
-    
-    # Utwórz datasety
-    train_dataset = MultiViewPairDataset(
-        loader, 
-        split='train',
-        debug_mode=debug_mode,
-        debug_num_sequences=debug_num_sequences,
-        **dataset_kwargs
+    # Create dataset
+    dataset = MultiViewPairDataset(
+        CO3DDatasetLoader(data_path),
+        image_size=image_size,
+        max_angle_diff=max_angle_diff,
+        min_angle_diff=min_angle_diff,
+        max_pairs_per_sequence=max_pairs_per_sequence if not debug_mode else debug_max_pairs
     )
     
-    val_dataset = MultiViewPairDataset(
-        loader,
-        split='val',
-        debug_mode=debug_mode,
-        debug_num_sequences=debug_num_sequences,
-        **dataset_kwargs
-    )
+    # Split into train and validation
+    total_size = len(dataset)
+    val_size = int(total_size * val_split)
+    train_size = total_size - val_size
     
-    # Utwórz data loadery z custom collate function
+    # Create train/val splits
+    indices = list(range(total_size))
+    random.Random(seed).shuffle(indices)
+    train_indices = indices[:train_size]
+    val_indices = indices[train_size:]
+    
+    # If max_samples_per_epoch is set, limit the training indices
+    if max_samples_per_epoch is not None:
+        train_indices = train_indices[:max_samples_per_epoch]
+    
+    # Create samplers
+    train_sampler = torch.utils.data.SubsetRandomSampler(train_indices)
+    val_sampler = torch.utils.data.SubsetRandomSampler(val_indices)
+    
+    # Create dataloaders
     train_loader = DataLoader(
-        train_dataset,
+        dataset,
         batch_size=batch_size,
-        shuffle=True,
+        sampler=train_sampler,
         num_workers=num_workers,
         pin_memory=True,
         collate_fn=custom_collate
     )
     
     val_loader = DataLoader(
-        val_dataset,
+        dataset,
         batch_size=batch_size,
-        shuffle=False,
+        sampler=val_sampler,
         num_workers=num_workers,
         pin_memory=True,
         collate_fn=custom_collate

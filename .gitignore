@@ -12,3 +12,5 @@ wandb/
 .DS_Store
 outputs/
 outputs_old/
+run.sh
+logs/
