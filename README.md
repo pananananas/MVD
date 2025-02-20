@@ -14,6 +14,7 @@
 - Czy CLIP (embedding tekstowy) jest nam potrzebny, co się stanie jak go usuniemy i będziemy tylko warunkować na obrazach
 
 3. Trening 
+- lightning integration, wandb config and sweeps
 - multi-gpu
 - feature matching loss
 - trenowanie nie tylko nowych warstw ale fine tuning całości/LoRA adapter

@@ -1,4 +1,5 @@
-from torch.utils.data import Dataset, DataLoader, Subset
+from pytorch_lightning import LightningDataModule
+from torch.utils.data import Dataset, DataLoader
 from src.load_co3d import CO3DDatasetLoader
 from typing import List, Tuple, Dict
 import torchvision.transforms as T
@@ -310,3 +311,43 @@ def create_dataloaders(
     )
     
     return train_loader, val_loader
+
+class MVDDataModule(LightningDataModule):
+    def __init__(
+        self,
+        data_path: str,
+        batch_size: int = 4,
+        image_size: tuple = (256, 256),
+        max_angle_diff: float = 45.0,
+        min_angle_diff: float = 15.0,
+        max_pairs_per_sequence: int = 10,
+        debug_mode: bool = False,
+        debug_num_sequences: int = 2,
+        debug_max_pairs: int = 5,
+        max_samples_per_epoch: int = None,
+        num_workers: int = 4,
+        seed: int = 42
+    ):
+        super().__init__()
+        self.save_hyperparameters()
+        
+    def setup(self, stage=None):
+        self.train_loader, self.val_loader = create_dataloaders(
+            data_path=self.hparams.data_path,
+            batch_size=self.hparams.batch_size,
+            image_size=self.hparams.image_size,
+            max_angle_diff=self.hparams.max_angle_diff,
+            min_angle_diff=self.hparams.min_angle_diff,
+            max_pairs_per_sequence=self.hparams.max_pairs_per_sequence if not self.hparams.debug_mode else self.hparams.debug_max_pairs,
+            debug_mode=self.hparams.debug_mode,
+            debug_num_sequences=self.hparams.debug_num_sequences,
+            max_samples_per_epoch=self.hparams.max_samples_per_epoch,
+            num_workers=self.hparams.num_workers,
+            seed=self.hparams.seed
+        )
+    
+    def train_dataloader(self):
+        return self.train_loader
+    
+    def val_dataloader(self):
+        return self.val_loader

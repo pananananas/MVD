@@ -1,76 +1,130 @@
-from .utils import EarlyStopping, CheckpointManager, create_output_dirs
 from .losses import PerceptualLoss, compute_losses
+from pytorch_lightning import LightningModule
+from .utils import create_output_dirs
 from pytorch_msssim import SSIM
-from tqdm import tqdm
 from PIL import Image
 import wandb
 import torch
 
-class MVDTrainer:
+class MVDLightningModule(LightningModule):
     def __init__(
         self,
         pipeline,
-        train_loader,
-        val_loader,
-        optimizer,
-        device,
         config,
         output_dir="outputs"
     ):
-        self.pipeline = pipeline
-        self.train_loader = train_loader
-        self.val_loader = val_loader
-        self.optimizer = optimizer
-        self.device = device
+        super().__init__()
         self.config = config
+        self.save_hyperparameters(ignore=['pipeline'])
+        
+        # Register pipeline components as modules
+        self.unet = pipeline.unet
+        self.vae = pipeline.vae
+        self.text_encoder = pipeline.text_encoder
+        self.tokenizer = pipeline.tokenizer
+        self.scheduler = pipeline.scheduler
+        self.pipeline = pipeline
+        
+        # Freeze base UNet parameters
+        for name, param in self.unet.named_parameters():
+            # Only train the added multi-view components
+            if not any(x in name for x in ['camera_encoder', 'down_modulators', 'up_modulators', 'mid_modulator']):
+                param.requires_grad = False
+        
+        # Freeze VAE and text encoder
+        self.vae.requires_grad_(False)
+        self.text_encoder.requires_grad_(False)
+        self.vae.eval()
+        self.text_encoder.eval()
+        
+        # Print parameter counts
+        total_params = sum(p.numel() for p in self.unet.parameters())
+        trainable_params = sum(p.numel() for p in self.unet.parameters() if p.requires_grad)
+        print(f"Total UNet parameters: {total_params:,}")
+        print(f"Trainable parameters: {trainable_params:,}")
+        print(f"Frozen parameters: {total_params - trainable_params:,}")
         
         # Create output directories
         self.dirs = create_output_dirs(output_dir)
         
-        # Initialize loss functions
-        self.perceptual_loss = PerceptualLoss(device=device)
+        # Initialize SSIM loss
         self.ssim = SSIM(data_range=2.0, size_average=True)  # range [-1,1]
         
-        # Initialize training utilities
-        self.early_stopping = EarlyStopping(
-            patience=config.get('early_stopping_patience', 7)
-        )
-        self.checkpoint_manager = CheckpointManager(
-            self.dirs['checkpoints'],
-            max_checkpoints=config.get('max_checkpoints', 5)
-        )
+        # Perceptual loss will be initialized in setup
+        self.perceptual_loss = None
         
-        # Load latest checkpoint if exists
-        self.start_epoch = 0
-        self._load_checkpoint()
-        
-    def _load_checkpoint(self):
-        checkpoint = self.checkpoint_manager.load_latest(self.pipeline, self.optimizer)
-        if checkpoint:
-            self.start_epoch = checkpoint['epoch'] + 1
-            print(f"Resuming from epoch {self.start_epoch}")
+        # For logging
+        self.training_step_outputs = []
+        self.validation_step_outputs = []
     
-    def train_step(self, batch, batch_idx):
-        # Get losses dictionary
-        losses = self.train_step_inner(batch, batch_idx)
+    def setup(self, stage=None):
+        # Initialize perceptual loss with correct device
+        if self.perceptual_loss is None:
+            self.perceptual_loss = PerceptualLoss(device=self.device)
         
-        # Scale only the total loss for gradient accumulation
-        scaled_loss = losses['total_loss'] / self.config['gradient_accumulation_steps']
-        scaled_loss.backward()
+        # Move pipeline components to correct device
+        self.pipeline.to(self.device)
         
-        # Only update weights after accumulating gradients
-        if (batch_idx + 1) % self.config['gradient_accumulation_steps'] == 0:
-            if self.config.get('max_grad_norm'):
-                torch.nn.utils.clip_grad_norm_(
-                    self.pipeline.unet.parameters(),
-                    self.config['max_grad_norm']
-                )
-            self.optimizer.step()
-            self.optimizer.zero_grad()
-        
-        return losses  # Return the original losses dictionary for logging
+        # Set float32 matmul precision for better performance
+        torch.set_float32_matmul_precision('high')
     
-    def train_step_inner(self, batch, batch_idx):
+    def on_train_epoch_start(self):
+        self.training_step_outputs = []
+    
+    def on_validation_epoch_start(self):
+        self.validation_step_outputs = []
+    
+    def on_train_epoch_end(self):
+        # Calculate epoch-level metrics
+        epoch_losses = {
+            'total_loss': 0.0,
+            'noise_loss': 0.0,
+            'recon_loss': 0.0,
+            'perceptual_loss': 0.0,
+            'ssim_loss': 0.0,
+            'geometric_loss': 0.0,
+            'ssim_value': 0.0,
+        }
+        
+        for output in self.training_step_outputs:
+            for key in epoch_losses:
+                epoch_losses[key] += output[key]
+        
+        # Average the losses
+        num_steps = len(self.training_step_outputs)
+        if num_steps > 0:
+            for key in epoch_losses:
+                epoch_losses[key] /= num_steps
+                self.log(f"train/{key}_epoch", epoch_losses[key], on_epoch=True, sync_dist=True)
+        
+        self.training_step_outputs = []
+    
+    def on_validation_epoch_end(self):
+        # Calculate epoch-level metrics
+        epoch_losses = {
+            'total_loss': 0.0,
+            'noise_loss': 0.0,
+            'recon_loss': 0.0,
+            'perceptual_loss': 0.0,
+            'ssim_loss': 0.0,
+            'geometric_loss': 0.0,
+            'ssim_value': 0.0,
+        }
+        
+        for output in self.validation_step_outputs:
+            for key in epoch_losses:
+                epoch_losses[key] += output[key]
+        
+        # Average the losses
+        num_steps = len(self.validation_step_outputs)
+        if num_steps > 0:
+            for key in epoch_losses:
+                epoch_losses[key] /= num_steps
+                self.log(f"val/{key}", epoch_losses[key], on_epoch=True, sync_dist=True)
+        
+        self.validation_step_outputs = []
+    
+    def forward(self, batch):
         # Move batch to device
         source_images = batch['source_image'].to(self.device)
         target_images = batch['target_image'].to(self.device)
@@ -83,32 +137,32 @@ class MVDTrainer:
         prompts = [self.config['prompt']] * batch_size
         
         # Tokenize with proper batch size
-        text_input = self.pipeline.tokenizer(
+        text_input = self.tokenizer(
             prompts,
             padding="max_length",
-            max_length=self.pipeline.tokenizer.model_max_length,
+            max_length=self.tokenizer.model_max_length,
             truncation=True,
             return_tensors="pt"
         ).to(self.device)
         
         # Encode prompt
-        text_embeddings = self.pipeline.text_encoder(text_input.input_ids)[0]
+        text_embeddings = self.text_encoder(text_input.input_ids)[0]
         
         # Forward pass
         noise = torch.randn_like(source_images)
         timesteps = torch.randint(
             0,
-            self.pipeline.scheduler.config.num_train_timesteps,
+            self.scheduler.config.num_train_timesteps,
             (source_images.shape[0],),
             device=self.device
         )
-        noisy_images = self.pipeline.scheduler.add_noise(source_images, noise, timesteps)
+        noisy_images = self.scheduler.add_noise(source_images, noise, timesteps)
         
         # Add extra channel for noise prediction (alpha channel)
         noisy_images = torch.cat([noisy_images, torch.zeros_like(noisy_images[:, :1])], dim=1)
         
         # Predict noise
-        noise_pred = self.pipeline.unet(
+        noise_pred = self.unet(
             sample=noisy_images,
             timestep=timesteps,
             encoder_hidden_states=text_embeddings,
@@ -118,11 +172,16 @@ class MVDTrainer:
         ).sample
         
         # Denoise the image
-        alpha_t = self.pipeline.scheduler.alphas_cumprod[timesteps]
+        alpha_t = self.scheduler.alphas_cumprod[timesteps]
         alpha_t = alpha_t.view(-1, 1, 1, 1)
         denoised_images = (noisy_images - (1 - alpha_t).sqrt() * noise_pred) / alpha_t.sqrt()
         
-        # Compute all losses
+        return noise_pred, noise, denoised_images, target_images, source_images
+    
+    def training_step(self, batch, batch_idx):
+        noise_pred, noise, denoised_images, target_images, source_images = self.forward(batch)
+        
+        # Compute losses
         losses = compute_losses(
             noise_pred=noise_pred,
             noise=noise,
@@ -134,23 +193,68 @@ class MVDTrainer:
             config=self.config
         )
         
-        return losses
+        # Log step metrics
+        for name, value in losses.items():
+            self.log(f"train/{name}_step", value.item() if torch.is_tensor(value) else value, 
+                    on_step=True, prog_bar=True)
+        
+        # Save for epoch-level computation
+        self.training_step_outputs.append(
+            {k: v.item() if torch.is_tensor(v) else v for k, v in losses.items()}
+        )
+        
+        # Save samples periodically
+        if batch_idx % self.config.get('sample_interval', 100) == 0:
+            self._save_generated_samples(batch, batch_idx, self.current_epoch)
+        
+        return losses['total_loss']
     
-    @torch.no_grad()
-    def validation_step(self, batch):
-        self.pipeline.unet.eval()
-        losses = self.train_step_inner(batch, 0)  # batch_idx=0 since we don't need it for validation
-        self.pipeline.unet.train()
-        return losses
+    def validation_step(self, batch, batch_idx):
+        noise_pred, noise, denoised_images, target_images, source_images = self.forward(batch)
+        
+        # Compute losses
+        losses = compute_losses(
+            noise_pred=noise_pred,
+            noise=noise,
+            denoised_images=denoised_images,
+            target_images=target_images,
+            source_images=source_images,
+            perceptual_loss_fn=self.perceptual_loss,
+            ssim_loss_fn=self.ssim,
+            config=self.config
+        )
+        
+        # Save for epoch-level computation
+        self.validation_step_outputs.append(
+            {k: v.item() if torch.is_tensor(v) else v for k, v in losses.items()}
+        )
+        
+        return losses['total_loss']
     
-    def validation_epoch(self):
-        val_losses = []
-        for batch in self.val_loader:
-            losses = self.validation_step(batch)
-            val_losses.append(losses['total_loss'].item())
-        return sum(val_losses) / len(val_losses)
+    def configure_optimizers(self):
+        # Only optimize UNet parameters
+        optimizer = torch.optim.Adam(
+            filter(lambda p: p.requires_grad, self.unet.parameters()),
+            lr=self.config['learning_rate']
+        )
+        
+        # Configure learning rate scheduler
+        scheduler = torch.optim.lr_scheduler.LinearLR(
+            optimizer,
+            start_factor=1.0,
+            end_factor=0.1,
+            total_iters=self.trainer.estimated_stepping_batches,
+        )
+        
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "step",
+            },
+        }
     
-    def save_generated_samples(self, batch, batch_idx, epoch):
+    def _save_generated_samples(self, batch, batch_idx, epoch):
         with torch.no_grad():
             # Generate images
             batch_size = len(batch['source_image'])
@@ -186,83 +290,8 @@ class MVDTrainer:
                 generated_img.save(save_dir / f'batch_{batch_idx}_sample_{i}_generated.png')
             
             # Log images to wandb
-            # wandb.log({
-            #     f"samples/epoch_{epoch}_batch_{batch_idx}": [
-            #         wandb.Image(img) for img in images[:4]  # Log first 4 images
-            #     ]
-            # })
-    
-    def train(self):
-        best_val_loss = float('inf')
-        global_step = 0
-        
-        # Initialize learning rate scheduler
-        num_training_steps = len(self.train_loader) * self.config['epochs']
-        scheduler = torch.optim.lr_scheduler.LinearLR(
-            self.optimizer,
-            start_factor=1.0,
-            end_factor=0.1,
-            total_iters=num_training_steps,
-        )
-        
-        for epoch in range(self.start_epoch, self.config['epochs']):
-            self.pipeline.unet.train()
-            epoch_losses = []
-            
-            # Training loop
-            progress_bar = tqdm(self.train_loader, desc=f"Epoch {epoch}")
-            for batch_idx, batch in enumerate(progress_bar):
-                # Training step
-                losses = self.train_step(batch, batch_idx)
-                epoch_losses.append(losses['total_loss'].item())
-                global_step += 1
-                
-                # Update progress bar
-                progress_bar.set_postfix({
-                    'loss': losses['total_loss'].item(),
-                    'avg_loss': sum(epoch_losses) / len(epoch_losses),
-                    'lr': scheduler.get_last_lr()[0]
-                })
-                
-                # Log metrics
-                wandb.log({
-                    f"train/{k}": v for k, v in losses.items()
-                })
-                wandb.log({
-                    'learning_rate': scheduler.get_last_lr()[0],
-                    'global_step': global_step
-                })
-                
-                # Save samples periodically
-                if batch_idx % self.config.get('sample_interval', 100) == 0:
-                    self.save_generated_samples(batch, batch_idx, epoch)
-                
-                # Update learning rate
-                scheduler.step()
-            
-            # Validation
-            val_loss = self.validation_epoch()
             wandb.log({
-                'val/loss': val_loss
-            })
-            
-            # Save checkpoint if best model
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                self.checkpoint_manager.save(
-                    self.pipeline,
-                    self.optimizer,
-                    epoch,
-                    val_loss,
-                    metrics={
-                        'val_loss': val_loss,
-                        'epoch': epoch,
-                        'global_step': global_step
-                    }
-                )
-            
-            # Early stopping check
-            self.early_stopping(val_loss)
-            if self.early_stopping.early_stop:
-                print("Early stopping triggered")
-                break 
+                f"samples/epoch_{epoch}_batch_{batch_idx}": [
+                    wandb.Image(img) for img in images[:4]  # Log first 4 images
+                ]
+            }) 
