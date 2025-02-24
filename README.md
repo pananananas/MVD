@@ -10,14 +10,14 @@
 
 2. Modyfikacje modelu
 - Zbadanie poprawności embeddingów parametrów kamer
-- Zbadanie czy model jest w stanie generować kolejne widoki po dłuższym treningu
-- Czy CLIP (embedding tekstowy) jest nam potrzebny, co się stanie jak go usuniemy i będziemy tylko warunkować na obrazach
+- implementacja image conditioning 
+- dodanie dodatkowej atencji w UNET do warunkowania na parametrach kamer
+- dodanie dodatkowej atencji w UNET do image conditioning
 
 3. Trening 
 - lightning integration, wandb config and sweeps
 - multi-gpu
-- feature matching loss
-- trenowanie nie tylko nowych warstw ale fine tuning całości/LoRA adapter
+- feature matching loss (between generated and source image)
 - integracja Hydra z WANDB do zarządzania konfiguracją i logowania
 
 # Zbadane rzeczy
@@ -26,6 +26,7 @@ Konkatenacja embeddingów kamer z promptem tekstowym nie daje dobrych wyników.
 
 # Użyte modele
 - [stable-diffusion-v1-5](https://huggingface.co/Jiali/stable-diffusion-1.5)
+- [stable-diffusion-2-1](https://huggingface.co/stabilityai/stable-diffusion-2-1)
 
 
 # Użyte datasety

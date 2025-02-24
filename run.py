@@ -22,7 +22,7 @@ if __name__ == '__main__':
     
     config = {
         # Model parameters
-        "architecture": "runwayml/stable-diffusion-v1-5",
+        "architecture": "stabilityai/stable-diffusion-2-1",
         "torch_dtype": "float32",
         "use_memory_efficient_attention": True,
         "enable_gradient_checkpointing": True,
@@ -38,7 +38,7 @@ if __name__ == '__main__':
         
         # Dataset parameters
         "dataset": "CO3D-motor",
-        "image_size": (512, 512),
+        "image_size": (768, 768),
         "max_angle_diff": 45.0,
         "min_angle_diff": 15.0,
         "max_pairs_per_sequence": 10,

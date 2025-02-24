@@ -1,6 +1,6 @@
 from pytorch_lightning import LightningDataModule
 from torch.utils.data import Dataset, DataLoader
-from src.load_co3d import CO3DDatasetLoader
+from datasets.load_co3d import CO3DDatasetLoader
 from typing import List, Tuple, Dict
 import torchvision.transforms as T
 from pathlib import Path
@@ -14,7 +14,7 @@ class MultiViewPairDataset(Dataset):
     def __init__(self, 
                  loader,
                  split: str = 'train',
-                 image_size: Tuple[int, int] = (256, 256),
+                 image_size: Tuple[int, int] = (1024, 1024),
                  max_angle_diff: float = 45.0,
                  min_angle_diff: float = 15.0,
                  max_pairs_per_sequence: int = 10,
@@ -233,7 +233,7 @@ def custom_collate(batch):
 def create_dataloaders(
     data_path,
     batch_size=4,
-    image_size=(256, 256),
+    image_size=(1024, 1024),
     max_angle_diff=45.0,
     min_angle_diff=15.0,
     max_pairs_per_sequence=10,
@@ -317,7 +317,7 @@ class MVDDataModule(LightningDataModule):
         self,
         data_path: str,
         batch_size: int = 4,
-        image_size: tuple = (256, 256),
+        image_size: tuple = (1024, 1024),
         max_angle_diff: float = 45.0,
         min_angle_diff: float = 15.0,
         max_pairs_per_sequence: int = 10,

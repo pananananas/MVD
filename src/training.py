@@ -50,7 +50,7 @@ class MVDLightningModule(LightningModule):
         # Initialize SSIM loss
         self.ssim = SSIM(data_range=2.0, size_average=True)  # range [-1,1]
         
-        # Perceptual loss will be initialized in setup
+        # Perceptual loss initialized in setup
         self.perceptual_loss = None
         
         # For logging
@@ -58,14 +58,10 @@ class MVDLightningModule(LightningModule):
         self.validation_step_outputs = []
     
     def setup(self, stage=None):
-        # Initialize perceptual loss with correct device
+        # Initialize perceptual loss
         if self.perceptual_loss is None:
             self.perceptual_loss = PerceptualLoss(device=self.device)
-        
-        # Move pipeline components to correct device
         self.pipeline.to(self.device)
-        
-        # Set float32 matmul precision for better performance
         torch.set_float32_matmul_precision('high')
     
     def on_train_epoch_start(self):

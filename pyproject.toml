@@ -12,6 +12,7 @@ dependencies = [
     "kornia>=0.8.0",
     "lightning>=2.5.0.post0",
     "numpy>=2.2.3",
+    "objaverse>=0.1.7",
     "open3d>=0.19.0",
     "pillow>=11.1.0",
     "pytorch-lightning>=2.5.0.post0",

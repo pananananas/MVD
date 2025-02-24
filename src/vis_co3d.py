@@ -1,4 +1,4 @@
-from src.load_co3d import CO3DDatasetLoader
+from datasets.load_co3d import CO3DDatasetLoader
 from mpl_toolkits.mplot3d import Axes3D
 import plotly.graph_objects as go
 import matplotlib.pyplot as plt

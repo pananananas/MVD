@@ -108,7 +108,7 @@ class CO3DDatasetLoader:
 
     def prepare_training_data(self, 
                             sequence_id: str,
-                            image_size: Tuple[int, int] = (256, 256)) -> Dict[str, torch.Tensor]:
+                            image_size: Tuple[int, int] = (1024, 1024)) -> Dict[str, torch.Tensor]:
         """
         Przygotowuje dane do treningu dla pojedynczej sekwencji
         Args:
