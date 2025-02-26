@@ -13,3 +13,5 @@ wandb/
 outputs/
 outputs_old/
 logs/
+.env
+.env.local

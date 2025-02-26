@@ -24,7 +24,7 @@ class CameraEncoder(nn.Module):
         )
         
         self.translation_encoder = nn.Sequential(
-            nn.Linear(output_dim, output_dim),  # Takes positional encoded translation
+            nn.Linear(output_dim, output_dim),
             nn.LayerNorm(output_dim),
             nn.ReLU(),
             nn.Linear(output_dim, output_dim)
