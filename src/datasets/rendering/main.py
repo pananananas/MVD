@@ -101,6 +101,7 @@ def handle_found_object(
     """
     save_uid = get_uid_from_str(file_identifier)
     args = f"--object_path '{local_path}' --num_renders {num_renders}"
+    ic(local_path, save_uid)
 
     # get the GPU to use for rendering
     using_gpu: bool = True
@@ -140,24 +141,59 @@ def handle_found_object(
         if only_northern_hemisphere:
             args += " --only_northern_hemisphere"
 
-        # get the command to run
-        command = f"blender-3.2.2-linux-x64/blender --background --python blender_script.py -- {args}"
+        # get the command to run - modified to use module load
+        command = f"module load Blender/3.5.0-linux-x86_64-CUDA-11.7.0 && blender --background --python blender_script.py -- {args}"
         if using_gpu:
             command = f"export DISPLAY=:0.{gpu_i} && {command}"
+        
+        ic(command)  # Log the command being executed
 
-        # render the object (put in dev null)
-        subprocess.run(
-            ["bash", "-c", command],
-            timeout=render_timeout,
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        # Check for blender_script.py existence before running
+        if not os.path.exists("blender_script.py"):
+            logger.error("blender_script.py not found")
+            ic("blender_script.py not found in", os.getcwd())
+            if failed_log_file is not None:
+                log_processed_object(
+                    failed_log_file,
+                    file_identifier,
+                    sha256,
+                    "missing_script"
+                )
+            return False
+
+        # render the object (capture output for debugging)
+        try:
+            result = subprocess.run(
+                ["bash", "-c", command],
+                timeout=render_timeout,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            # Only log if there was an error
+            if result.returncode != 0:
+                ic("Blender process failed with code", result.returncode)
+                # Log a snippet of the error
+                stderr_sample = result.stderr.split('\n')[:5]
+                ic("STDERR sample:", stderr_sample)
+        except subprocess.TimeoutExpired:
+            ic("Blender process timed out after", render_timeout, "seconds")
+            if failed_log_file is not None:
+                log_processed_object(
+                    failed_log_file,
+                    file_identifier,
+                    sha256,
+                    "timeout"
+                )
+            return False
 
         # check that the renders were saved successfully
         png_files = glob.glob(os.path.join(target_directory, "*.png"))
         metadata_files = glob.glob(os.path.join(target_directory, "*.json"))
         npy_files = glob.glob(os.path.join(target_directory, "*.npy"))
+        ic(f"Found files: {len(png_files)} PNGs, {len(metadata_files)} JSONs, {len(npy_files)} NPYs")
+        
         if (
             (len(png_files) != num_renders)
             or (len(npy_files) != num_renders)
@@ -205,7 +241,8 @@ def handle_found_object(
         # log that this object was rendered successfully
         if successful_log_file is not None:
             log_processed_object(successful_log_file, file_identifier, sha256)
-
+        
+        ic("Successfully rendered", file_identifier)
         return True
 
 
