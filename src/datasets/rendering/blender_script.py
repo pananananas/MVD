@@ -6,6 +6,7 @@ import math
 import os
 import random
 import sys
+import datetime
 from typing import Any, Callable, Dict, Generator, List, Literal, Optional, Set, Tuple
 
 import bpy
@@ -299,28 +300,31 @@ def load_object(object_path: str) -> None:
         raise ValueError(f"Unsupported file type: {object_path}")
 
     if file_extension == "usdz":
-        # install usdz io package
-        dirname = os.path.dirname(os.path.realpath(__file__))
-        usdz_package = os.path.join(dirname, "io_scene_usdz.zip")
-        bpy.ops.preferences.addon_install(filepath=usdz_package)
-        # enable it
-        addon_name = "io_scene_usdz"
-        bpy.ops.preferences.addon_enable(module=addon_name)
-        # import the usdz
-        from io_scene_usdz.import_usdz import import_usdz
-
-        import_usdz(context, filepath=object_path, materials=True, animations=True)
+        #  Don't support usdz for now
         return None
-
+        
     # load from existing import functions
     import_function = IMPORT_FUNCTIONS[file_extension]
 
     if file_extension == "blend":
         import_function(directory=object_path, link=False)
     elif file_extension in {"glb", "gltf"}:
+        # For GLTF/GLB, make sure to import with textures
         import_function(filepath=object_path, merge_vertices=True)
+    elif file_extension == "obj":
+        # For OBJ, ensure MTL files are loaded
+        import_function(filepath=object_path, use_materials=True)
     else:
         import_function(filepath=object_path)
+        
+    # After importing, print info about materials for debugging
+    print(f"Loaded object with {len(bpy.data.materials)} materials")
+    for i, mat in enumerate(bpy.data.materials):
+        print(f"Material {i}: {mat.name}, Use Nodes: {mat.use_nodes}")
+        if mat.use_nodes:
+            for node in mat.node_tree.nodes:
+                if node.type == 'TEX_IMAGE' and node.image:
+                    print(f"  - Image texture: {node.image.name}, filepath: {node.image.filepath}")
 
 
 def scene_bbox(
@@ -730,6 +734,39 @@ class MetadataExtractor:
         }
 
 
+def ensure_texture_visibility() -> None:
+    """Ensures that textures are visible in the render by properly configuring material settings."""
+    texture_count = 0
+    for material in bpy.data.materials:
+        if not material.use_nodes:
+            continue
+            
+        # Check if there are any texture nodes
+        has_textures = False
+        for node in material.node_tree.nodes:
+            if node.type == 'TEX_IMAGE' and node.image:
+                has_textures = True
+                texture_count += 1
+                
+                # Ensure the texture is connected to the output
+                principled = None
+                for n in material.node_tree.nodes:
+                    if n.type == 'BSDF_PRINCIPLED':
+                        principled = n
+                        break
+                
+                if principled:
+                    # Try to connect the texture to the base color if not already connected
+                    if not any(link.to_socket == principled.inputs['Base Color'] for link in material.node_tree.links):
+                        material.node_tree.links.new(
+                            node.outputs['Color'], 
+                            principled.inputs['Base Color']
+                        )
+    
+    print(f"Found and ensured visibility for {texture_count} textures")
+    return texture_count > 0
+
+
 def render_object(
     object_file: str,
     num_renders: int,
@@ -790,13 +827,19 @@ def render_object(
         missing_textures = delete_missing_textures()
     metadata["missing_textures"] = missing_textures
 
+    # Make sure textures are visible in the render
+    has_visible_textures = ensure_texture_visibility()
+    metadata["has_visible_textures"] = has_visible_textures
+
     # possibly apply a random color to all objects
-    if object_file.endswith(".stl") or object_file.endswith(".ply"):
-        assert len(bpy.context.selected_objects) == 1
+    if (object_file.endswith(".stl") or object_file.endswith(".ply") or not has_visible_textures):
+        # Only apply random colors if there are no textures or for files that don't typically have textures
+        print(f"Applying random colors to {object_file} (has_visible_textures={has_visible_textures})")
         rand_color = apply_single_random_color_to_all_objects()
         metadata["random_color"] = rand_color
     else:
         metadata["random_color"] = None
+        print(f"Using existing textures for {object_file}")
 
     # save metadata
     metadata_path = os.path.join(output_dir, "metadata.json")
@@ -827,73 +870,248 @@ def render_object(
         rt_matrix_path = os.path.join(output_dir, f"{i:03d}.npy")
         np.save(rt_matrix_path, rt_matrix)
 
+    # save the 3d object in the output directory
+    bpy.ops.wm.save_as_mainfile(filepath=os.path.join(output_dir, "scene.blend"))
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--object_path",
-        type=str,
-        required=True,
-        help="Path to the object file",
-    )
-    parser.add_argument(
-        "--output_dir",
-        type=str,
-        required=True,
-        help="Path to the directory where the rendered images and metadata will be saved.",
-    )
-    parser.add_argument(
-        "--engine",
-        type=str,
-        default="BLENDER_EEVEE",
-        choices=["CYCLES", "BLENDER_EEVEE"],
-    )
-    parser.add_argument(
-        "--only_northern_hemisphere",
-        action="store_true",
-        help="Only render the northern hemisphere of the object.",
-        default=False,
-    )
-    parser.add_argument(
-        "--num_renders",
-        type=int,
-        default=12,
-        help="Number of renders to save of the object.",
-    )
-    argv = sys.argv[sys.argv.index("--") + 1 :]
-    args = parser.parse_args(argv)
+    try:
+        parser = argparse.ArgumentParser()
+        parser.add_argument(
+            "--object_path",
+            type=str,
+            required=True,
+            help="Path to the object file",
+        )
+        parser.add_argument(
+            "--output_dir",
+            type=str,
+            required=True,
+            help="Path to the directory where the rendered images and metadata will be saved.",
+        )
+        parser.add_argument(
+            "--engine",
+            type=str,
+            default="BLENDER_EEVEE",
+            choices=["CYCLES", "BLENDER_EEVEE"],
+        )
+        parser.add_argument(
+            "--only_northern_hemisphere",
+            action="store_true",
+            help="Only render the northern hemisphere of the object.",
+            default=False,
+        )
+        parser.add_argument(
+            "--num_renders",
+            type=int,
+            default=12,
+            help="Number of renders to save of the object.",
+        )
+        parser.add_argument(
+            "--verbose",
+            action="store_true",
+            help="Print verbose output",
+        )
+        
+        # Write a marker file to show script was started
+        argv = sys.argv[sys.argv.index("--") + 1 :]
+        args = parser.parse_args(argv)
+        
+        with open(os.path.join(args.output_dir, "script_started.txt"), "w") as f:
+            f.write("Blender script started\n")
+            f.write(f"Args: {args}\n")
+        
+        print(f"Script started with args: {args}")
+        print(f"Output directory: {args.output_dir}")
+        
+        context = bpy.context
+        scene = context.scene
+        render = scene.render
 
-    context = bpy.context
-    scene = context.scene
-    render = scene.render
+        # Set render settings
+        render.engine = args.engine
+        render.image_settings.file_format = "PNG"
+        render.image_settings.color_mode = "RGBA"
+        render.resolution_x = 1024
+        render.resolution_y = 1024
+        render.resolution_percentage = 100
+        
+        # Additional settings for better texture rendering
+        if render.engine == "CYCLES":
+            scene.cycles.use_denoising = True
+            scene.cycles.samples = 128  # More samples for better quality
+        else:  # BLENDER_EEVEE
+            scene.eevee.use_ssr = True  # Screen Space Reflections
+            scene.eevee.use_ssr_refraction = True
+            scene.eevee.taa_render_samples = 32  # Anti-aliasing samples
+        
+        # Write another marker
+        with open(os.path.join(args.output_dir, "before_render.txt"), "w") as f:
+            f.write("About to start rendering\n")
 
-    # Set render settings
-    render.engine = args.engine
-    render.image_settings.file_format = "PNG"
-    render.image_settings.color_mode = "RGBA"
-    render.resolution_x = 512
-    render.resolution_y = 512
-    render.resolution_percentage = 100
-
-    # Set cycles settings
-    scene.cycles.device = "GPU"
-    scene.cycles.samples = 128
-    scene.cycles.diffuse_bounces = 1
-    scene.cycles.glossy_bounces = 1
-    scene.cycles.transparent_max_bounces = 3
-    scene.cycles.transmission_bounces = 3
-    scene.cycles.filter_width = 0.01
-    scene.cycles.use_denoising = True
-    scene.render.film_transparent = True
-    bpy.context.preferences.addons["cycles"].preferences.get_devices()
-    bpy.context.preferences.addons[
-        "cycles"
-    ].preferences.compute_device_type = "CUDA"  # or "OPENCL"
-
-    # Render the images
-    render_object(
-        object_file=args.object_path,
-        num_renders=args.num_renders,
-        only_northern_hemisphere=args.only_northern_hemisphere,
-        output_dir=args.output_dir,
-    )
+        # Render the images
+        render_object(
+            object_file=args.object_path,
+            num_renders=args.num_renders,
+            only_northern_hemisphere=args.only_northern_hemisphere,
+            output_dir=args.output_dir,
+        )
+        
+        # Load metadata to extract color information for the completion marker
+        metadata_path = os.path.join(args.output_dir, "metadata.json")
+        color_info = "Unknown"
+        texture_info = "Unknown"
+        scene_info = "Unknown"
+        camera_info = []
+        light_info = []
+        render_stats = {}
+        
+        try:
+            # Capture render statistics before they're lost
+            render_stats = {
+                "resolution": f"{render.resolution_x}x{render.resolution_y}",
+                "percentage": f"{render.resolution_percentage}%",
+                "engine": args.engine
+            }
+            
+            if args.engine == "CYCLES":
+                render_stats["samples"] = scene.cycles.samples
+                render_stats["denoising"] = "Enabled" if scene.cycles.use_denoising else "Disabled"
+            else:  # BLENDER_EEVEE
+                render_stats["aa_samples"] = scene.eevee.taa_render_samples
+                render_stats["ssr"] = "Enabled" if scene.eevee.use_ssr else "Disabled"
+                render_stats["ssr_refraction"] = "Enabled" if scene.eevee.use_ssr_refraction else "Disabled"
+            
+            # Capture light information
+            for light in [obj for obj in scene.objects if obj.type == 'LIGHT']:
+                light_data = light.data
+                light_info.append({
+                    "name": light.name,
+                    "type": light_data.type,
+                    "energy": light_data.energy,
+                    "color": [round(c*255) for c in light_data.color],
+                    "location": [round(c, 3) for c in light.location],
+                    "rotation": [round(math.degrees(r), 1) for r in light.rotation_euler]
+                })
+            
+            # Capture camera information for the last camera position
+            if scene.camera:
+                cam = scene.camera
+                camera_info = {
+                    "name": cam.name,
+                    "location": [round(c, 3) for c in cam.location],
+                    "rotation": [round(math.degrees(r), 1) for r in cam.rotation_euler],
+                    "lens": round(cam.data.lens, 1),
+                    "sensor_width": cam.data.sensor_width
+                }
+            
+            if os.path.exists(metadata_path):
+                with open(metadata_path, "r", encoding="utf-8") as f:
+                    metadata = json.load(f)
+                    
+                # Get information about random colors
+                random_color = metadata.get("random_color")
+                has_visible_textures = metadata.get("has_visible_textures", False)
+                
+                if random_color:
+                    # Format the color as RGB values
+                    color_values = [round(c * 255) for c in random_color[:3]]
+                    color_info = f"Applied random color RGB{tuple(color_values)}"
+                    
+                    # Add reason for random color
+                    if args.object_path.endswith(".stl") or args.object_path.endswith(".ply"):
+                        color_info += " (STL/PLY format doesn't support textures)"
+                    elif not has_visible_textures:
+                        color_info += " (No visible textures found in model)"
+                else:
+                    color_info = "Used original model textures"
+                    
+                # Add texture information
+                texture_info = f"Model has visible textures: {has_visible_textures}"
+                
+                # Get material count for additional context
+                material_count = metadata.get("material_count", 0)
+                texture_info += f", Material count: {material_count}"
+                
+                # Add scene information
+                scene_info = {
+                    "poly_count": metadata.get("poly_count", "Unknown"),
+                    "vert_count": metadata.get("vert_count", "Unknown"),
+                    "bbox_dimensions": "Unknown"
+                }
+                
+                # Add bounding box dimensions if available
+                if "scene_size" in metadata and "bbox_min" in metadata["scene_size"] and "bbox_max" in metadata["scene_size"]:
+                    bbox_min = metadata["scene_size"]["bbox_min"]
+                    bbox_max = metadata["scene_size"]["bbox_max"]
+                    dimensions = [round(bbox_max[i] - bbox_min[i], 3) for i in range(3)]
+                    scene_info["bbox_dimensions"] = f"X: {dimensions[0]}, Y: {dimensions[1]}, Z: {dimensions[2]}"
+                    scene_info["bbox_center"] = [round((bbox_max[i] + bbox_min[i])/2, 3) for i in range(3)]
+        
+        except Exception as e:
+            print(f"Error gathering detailed info: {str(e)}")
+            # Continue even if detailed info gathering fails
+        
+        # Final marker with enhanced information
+        with open(os.path.join(args.output_dir, "render_complete.txt"), "w") as f:
+            f.write("Rendering completed successfully\n\n")
+            
+            f.write("=== OBJECT INFORMATION ===\n")
+            f.write(f"Object path: {args.object_path}\n")
+            f.write(f"Color rendering: {color_info}\n")
+            f.write(f"Texture information: {texture_info}\n\n")
+            
+            f.write("=== SCENE INFORMATION ===\n")
+            if isinstance(scene_info, dict):
+                f.write(f"Poly count: {scene_info['poly_count']}\n")
+                f.write(f"Vertex count: {scene_info['vert_count']}\n")
+                f.write(f"Bounding box dimensions: {scene_info['bbox_dimensions']}\n")
+                if "bbox_center" in scene_info:
+                    f.write(f"Bounding box center: {scene_info['bbox_center']}\n\n")
+            else:
+                f.write(f"{scene_info}\n\n")
+                
+            f.write("=== CAMERA INFORMATION ===\n")
+            if camera_info:
+                f.write(f"Camera name: {camera_info['name']}\n")
+                f.write(f"Position (XYZ): {camera_info['location']}\n")
+                f.write(f"Rotation (degrees): {camera_info['rotation']}\n")
+                f.write(f"Focal length: {camera_info['lens']}mm\n")
+                f.write(f"Sensor width: {camera_info['sensor_width']}mm\n\n")
+            else:
+                f.write("Camera information not available\n\n")
+                
+            f.write("=== LIGHTING INFORMATION ===\n")
+            if light_info:
+                for i, light in enumerate(light_info):
+                    f.write(f"Light {i+1}: {light['name']} ({light['type']})\n")
+                    f.write(f"  Energy: {light['energy']}\n")
+                    f.write(f"  Color (RGB): {light['color']}\n")
+                    f.write(f"  Position: {light['location']}\n")
+                    f.write(f"  Rotation (degrees): {light['rotation']}\n")
+                f.write("\n")
+            else:
+                f.write("Lighting information not available\n\n")
+                
+            f.write("=== RENDER SETTINGS ===\n")
+            f.write(f"Engine: {render_stats.get('engine', args.engine)}\n")
+            f.write(f"Resolution: {render_stats.get('resolution', 'Unknown')}\n")
+            if 'samples' in render_stats:
+                f.write(f"Samples: {render_stats['samples']}\n")
+                f.write(f"Denoising: {render_stats['denoising']}\n")
+            if 'aa_samples' in render_stats:
+                f.write(f"AA Samples: {render_stats['aa_samples']}\n")
+                f.write(f"Screen Space Reflections: {render_stats['ssr']}\n")
+                f.write(f"SSR Refraction: {render_stats['ssr_refraction']}\n")
+            f.write("\n")
+            
+            f.write(f"Rendering completed at: {datetime.datetime.now().isoformat()}\n")
+            
+    except Exception as e:
+        # Write error to a file in output directory
+        error_path = os.path.join(args.output_dir if 'args' in locals() else "/tmp", "blender_error.txt")
+        with open(error_path, "w") as f:
+            f.write(f"Error in blender script: {str(e)}\n")
+            import traceback
+            f.write(traceback.format_exc())
+        print(f"ERROR: {str(e)}")
+        sys.exit(1)

@@ -1,4 +1,4 @@
-# Don't use this script
+# Don't use this script it makes mess and does not filter the saved files
 
 
 

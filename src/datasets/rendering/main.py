@@ -1,15 +1,16 @@
+from typing import Any, Dict, List, Literal, Optional, Union
+from functools import partial
+import multiprocessing
+import subprocess
+import platform
+import tempfile
+import zipfile
+import random
 import glob
 import json
-import multiprocessing
-import os
-import platform
-import random
-import subprocess
-import tempfile
 import time
-import zipfile
-from functools import partial
-from typing import Any, Dict, List, Literal, Optional, Union
+import os
+import shutil
 
 import fire
 import fsspec
@@ -35,7 +36,7 @@ def log_processed_object(csv_filename: str, *args) -> None:
     args = ",".join([str(arg) for arg in args])
     # log that this object was rendered successfully
     # saving locally to avoid excessive writes to the cloud
-    dirname = os.path.expanduser(f"~/.objaverse/logs/")
+    dirname = os.path.expanduser(f"/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/logs/")
     os.makedirs(dirname, exist_ok=True)
     with open(os.path.join(dirname, csv_filename), "a", encoding="utf-8") as f:
         f.write(f"{time.time()},{args}\n")
@@ -102,6 +103,10 @@ def handle_found_object(
     save_uid = get_uid_from_str(file_identifier)
     args = f"--object_path '{local_path}' --num_renders {num_renders}"
     ic(local_path, save_uid)
+    
+    # Log the file type for debugging
+    file_extension = os.path.splitext(local_path)[1].lower().lstrip('.')
+    ic(f"File extension: {file_extension}")
 
     # get the GPU to use for rendering
     using_gpu: bool = True
@@ -124,6 +129,26 @@ def handle_found_object(
         os.makedirs(target_directory, exist_ok=True)
         args += f" --output_dir {target_directory}"
 
+        # Check if blender_script.py exists and copy it to the temp directory
+        if not os.path.exists("blender_script.py"):
+            logger.error("blender_script.py not found")
+            ic("blender_script.py not found in", os.getcwd())
+            if failed_log_file is not None:
+                log_processed_object(
+                    failed_log_file,
+                    file_identifier,
+                    sha256,
+                    "missing_script"
+                )
+            return False
+        
+        # Copy the script to ensure it's accessible
+        shutil.copy("blender_script.py", temp_dir)
+        ic(f"Copied blender_script.py to {temp_dir}")
+        
+        # Update args to use the copied script
+        script_path = os.path.join(temp_dir, "blender_script.py")
+
         # check for Linux / Ubuntu or MacOS
         if platform.system() == "Linux" and using_gpu:
             args += " --engine BLENDER_EEVEE"
@@ -141,27 +166,11 @@ def handle_found_object(
         if only_northern_hemisphere:
             args += " --only_northern_hemisphere"
 
-        # get the command to run - modified to use module load
-        command = f"module load Blender/3.5.0-linux-x86_64-CUDA-11.7.0 && blender --background --python blender_script.py -- {args}"
-        if using_gpu:
-            command = f"export DISPLAY=:0.{gpu_i} && {command}"
-        
-        ic(command)  # Log the command being executed
+        # First try without DISPLAY to see if it helps
+        command = f"module load Blender/3.5.0-linux-x86_64-CUDA-11.7.0 && blender --background --python {script_path} -- {args} --verbose"
+        ic(command)
 
-        # Check for blender_script.py existence before running
-        if not os.path.exists("blender_script.py"):
-            logger.error("blender_script.py not found")
-            ic("blender_script.py not found in", os.getcwd())
-            if failed_log_file is not None:
-                log_processed_object(
-                    failed_log_file,
-                    file_identifier,
-                    sha256,
-                    "missing_script"
-                )
-            return False
-
-        # render the object (capture output for debugging)
+        # render the object and capture ALL output
         try:
             result = subprocess.run(
                 ["bash", "-c", command],
@@ -171,12 +180,34 @@ def handle_found_object(
                 stderr=subprocess.PIPE,
                 text=True
             )
-            # Only log if there was an error
-            if result.returncode != 0:
-                ic("Blender process failed with code", result.returncode)
-                # Log a snippet of the error
-                stderr_sample = result.stderr.split('\n')[:5]
-                ic("STDERR sample:", stderr_sample)
+            # Always log output for debugging
+            ic("Return code:", result.returncode)
+            if result.stderr:
+                ic("STDERR first 10 lines:")
+                stderr_lines = result.stderr.split('\n')[:10]
+                for line in stderr_lines:
+                    ic(line)
+            
+            if result.stdout:
+                ic("STDOUT first 10 lines:")
+                stdout_lines = result.stdout.split('\n')[:10]
+                for line in stdout_lines:
+                    ic(line)
+                    
+            # List files in target directory
+            if os.path.exists(target_directory) and os.path.isdir(target_directory):
+                files = os.listdir(target_directory)
+                ic(f"Files in target directory ({target_directory}):", files)
+            else:
+                ic(f"Target directory issue: {target_directory}")
+                ic(f"Exists: {os.path.exists(target_directory)}")
+                ic(f"Is directory: {os.path.isdir(target_directory)}")
+                # If it exists but isn't a directory, it means Blender saved a file at that path
+                if os.path.exists(target_directory) and not os.path.isdir(target_directory):
+                    # Create the directory and move the file
+                    os.rename(target_directory, f"{target_directory}.blend")
+                    os.makedirs(target_directory, exist_ok=True)
+                    ic("Created directory and renamed the file")
         except subprocess.TimeoutExpired:
             ic("Blender process timed out after", render_timeout, "seconds")
             if failed_log_file is not None:
@@ -371,9 +402,65 @@ def handle_missing_object(
     log_processed_object(log_file, file_identifier, sha256)
 
 
+def get_sample_objects(sample_size: int = 50) -> pd.DataFrame:
+    """Returns a DataFrame of sample objects from Objaverse-XL.
+    
+    Args:
+        sample_size (int): Number of objects to sample from the filtered dataset.
+        
+    Returns:
+        pd.DataFrame: DataFrame containing the sampled objects.
+    """
+    logger.info("Fetching annotations from Objaverse-XL...")
+    annotations = oxl.get_annotations(download_dir='/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse')
+    logger.info(f"Retrieved {len(annotations)} total annotations")
+    
+    # Filter to preferred formats - prioritizing formats less likely to use Git LFS
+    preferred_formats = ['glb', 'gltf', 'obj', 'fbx', 'stl', 'ply']
+    filtered_annotations = annotations[
+        annotations['fileType'].isin(preferred_formats)
+    ]
+    logger.info(f"Filtered to {len(filtered_annotations)} objects with preferred formats")
+    
+    # Aggressively filter out repos likely to use LFS
+    if 'source' in filtered_annotations.columns:
+        # Non-GitHub sources are less likely to use LFS
+        non_github = filtered_annotations[filtered_annotations['source'] != 'github']
+        if len(non_github) >= sample_size:
+            filtered_annotations = non_github
+            logger.info(f"Using only non-GitHub sources: {len(filtered_annotations)} objects")
+    
+    # Filter out large repositories (most likely to use Git LFS)
+    if 'repoSize' in filtered_annotations.columns:
+        # Only keep the smallest repos (under 100MB to be safe)
+        size_filtered = filtered_annotations[filtered_annotations['repoSize'] < 100000000]
+        if len(size_filtered) >= sample_size:
+            filtered_annotations = size_filtered
+            logger.info(f"Further filtered to {len(filtered_annotations)} objects with repo size < 10MB")
+    
+    # Sample a subset
+    if len(filtered_annotations) > sample_size:
+        sampled_objects = filtered_annotations.sample(sample_size, random_state=42)
+        logger.info(f"Sampled {len(sampled_objects)} objects for rendering")
+    else:
+        sampled_objects = filtered_annotations
+        logger.warning(f"Only {len(filtered_annotations)} objects available after filtering")
+    
+    # Ensure DataFrame has expected format
+    required_columns = ["fileIdentifier", "sha256", "source"]
+    for col in required_columns:
+        if col not in sampled_objects.columns:
+            logger.error(f"Required column '{col}' not found in annotations")
+            raise ValueError(f"Required column '{col}' not found in annotations")
+    
+    return sampled_objects
+
+
 def get_example_objects() -> pd.DataFrame:
     """Returns a DataFrame of example objects to use for debugging."""
-    return pd.read_json("example-objects.json", orient="records")
+    # For compatibility, keeping this function but making it call the sample function
+    logger.info("Using sample objects from Objaverse-XL dataset instead of examples")
+    return get_sample_objects(sample_size=50)
 
 
 def render_objects(
@@ -385,36 +472,10 @@ def render_objects(
     only_northern_hemisphere: bool = False,
     render_timeout: int = 300,
     gpu_devices: Optional[Union[int, List[int]]] = None,
+    use_example_objects: bool = False,
+    sample_size: int = 200,
 ) -> None:
-    """Renders objects in the Objaverse-XL dataset with Blender
-
-    Args:
-        render_dir (str, optional): Directory where the objects will be rendered.
-        download_dir (Optional[str], optional): Directory where the objects will be
-            downloaded. If None, the objects will not be downloaded. Defaults to None.
-        num_renders (int, optional): Number of renders to save of the object. Defaults
-            to 12.
-        processes (Optional[int], optional): Number of processes to use for downloading
-            the objects. If None, defaults to multiprocessing.cpu_count() * 3. Defaults
-            to None.
-        save_repo_format (Optional[Literal["zip", "tar", "tar.gz", "files"]], optional):
-            If not None, the GitHub repo will be deleted after rendering each object
-            from it.
-        only_northern_hemisphere (bool, optional): Only render the northern hemisphere
-            of the object. Useful for rendering objects that are obtained from
-            photogrammetry, since the southern hemisphere is often has holes. Defaults
-            to False.
-        render_timeout (int, optional): Number of seconds to wait for the rendering job
-            to complete. Defaults to 300.
-        gpu_devices (Optional[Union[int, List[int]]], optional): GPU device(s) to use
-            for rendering. If an int, the GPU device will be randomly selected from 0 to
-            gpu_devices - 1. If a list, the GPU device will be randomly selected from
-            the list. If 0, the CPU will be used for rendering. If None, all available
-            GPUs will be used. Defaults to None.
-
-    Returns:
-        None
-    """
+    """Renders objects in the Objaverse-XL dataset with Blender"""
     if platform.system() not in ["Linux", "Darwin"]:
         raise NotImplementedError(
             f"Platform {platform.system()} is not supported. Use Linux or MacOS."
@@ -438,8 +499,17 @@ def render_objects(
         processes = multiprocessing.cpu_count() * 3
 
     # get the objects to render
-    objects = get_example_objects()
-    objects.iloc[0]["fileIdentifier"]
+    if use_example_objects:
+        objects = pd.read_json("example-objects.json", orient="records")
+        logger.info(f"Using {len(objects)} example objects from JSON file.")
+    else:
+        objects = get_sample_objects(sample_size=sample_size)
+        logger.info(f"Using {len(objects)} sample objects from Objaverse-XL.")
+    
+    # Ensure file identifiers are accessible
+    if len(objects) > 0:
+        first_id = objects.iloc[0]["fileIdentifier"]
+        logger.info(f"First file identifier: {first_id}")
     objects = objects.copy()
     logger.info(f"Provided {len(objects)} objects to render.")
 
@@ -463,30 +533,40 @@ def render_objects(
     # shuffle the objects
     objects = objects.sample(frac=1).reset_index(drop=True)
 
-    oxl.download_objects(
-        objects=objects,
-        processes=processes,
-        save_repo_format=save_repo_format,
-        download_dir=download_dir,
-        handle_found_object=partial(
-            handle_found_object,
-            render_dir=render_dir,
-            num_renders=num_renders,
-            only_northern_hemisphere=only_northern_hemisphere,
-            gpu_devices=parsed_gpu_devices,
-            render_timeout=render_timeout,
-        ),
-        handle_new_object=handle_new_object,
-        handle_modified_object=partial(
-            handle_modified_object,
-            render_dir=render_dir,
-            num_renders=num_renders,
-            only_northern_hemisphere=only_northern_hemisphere,
-            gpu_devices=parsed_gpu_devices,
-            render_timeout=render_timeout,
-        ),
-        handle_missing_object=handle_missing_object,
-    )
+    # Simple download without retries for LFS errors
+    try:
+        oxl.download_objects(
+            objects=objects,
+            processes=processes,
+            save_repo_format=save_repo_format,
+            download_dir=download_dir,
+            handle_found_object=partial(
+                handle_found_object,
+                render_dir=render_dir,
+                num_renders=num_renders,
+                only_northern_hemisphere=only_northern_hemisphere,
+                gpu_devices=parsed_gpu_devices,
+                render_timeout=render_timeout,
+            ),
+            handle_new_object=handle_new_object,
+            handle_modified_object=partial(
+                handle_modified_object,
+                render_dir=render_dir,
+                num_renders=num_renders,
+                only_northern_hemisphere=only_northern_hemisphere,
+                gpu_devices=parsed_gpu_devices,
+                render_timeout=render_timeout,
+            ),
+            handle_missing_object=handle_missing_object,
+            timeout=300,  # Add timeout parameter to avoid hanging downloads
+        )
+    except subprocess.CalledProcessError as e:
+        if "git lfs" in str(e):
+            logger.error(f"Git LFS error encountered: {e}")
+            logger.info("Consider using smaller repositories or non-GitHub sources")
+        else:
+            logger.error(f"Error during download process: {e}")
+        raise
 
 
 if __name__ == "__main__":
