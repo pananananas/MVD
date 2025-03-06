@@ -1,3 +1,14 @@
+# Don't use this script
+
+
+
+
+
+
+
+
+
+
 # # Objaverse-XL API Tutorial
 # 
 # Objaverse-XL is a Universe of 10M+ 3D Objects.

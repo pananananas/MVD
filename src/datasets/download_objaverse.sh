@@ -12,11 +12,10 @@
 
 echo "Run started"
 
-# Set up temporary directory
 export TMPDIR="/net/pr2/projects/plgrid/plggtattooai/tmp"
 mkdir -p $TMPDIR
 echo "Using temporary directory: $TMPDIR"
 
-uv run src/datasets/download_objaverse.py
+uv run download_objaverse.py
 
 echo "Run completed! :>"
