@@ -421,7 +421,10 @@ def get_sample_objects(sample_size: int = 50) -> pd.DataFrame:
         annotations['fileType'].isin(preferred_formats)
     ]
     logger.info(f"Filtered to {len(filtered_annotations)} objects with preferred formats")
-    
+
+    ic(filtered_annotations.head())
+    ic(filtered_annotations.shape)
+
     # Aggressively filter out repos likely to use LFS
     if 'source' in filtered_annotations.columns:
         # Non-GitHub sources are less likely to use LFS
@@ -430,6 +433,9 @@ def get_sample_objects(sample_size: int = 50) -> pd.DataFrame:
             filtered_annotations = non_github
             logger.info(f"Using only non-GitHub sources: {len(filtered_annotations)} objects")
     
+    ic(filtered_annotations.head())
+    ic(filtered_annotations.shape)
+
     # Filter out large repositories (most likely to use Git LFS)
     if 'repoSize' in filtered_annotations.columns:
         # Only keep the smallest repos (under 100MB to be safe)
@@ -438,6 +444,9 @@ def get_sample_objects(sample_size: int = 50) -> pd.DataFrame:
             filtered_annotations = size_filtered
             logger.info(f"Further filtered to {len(filtered_annotations)} objects with repo size < 10MB")
     
+    ic(filtered_annotations.head())
+    ic(filtered_annotations.shape)
+
     # Sample a subset
     if len(filtered_annotations) > sample_size:
         sampled_objects = filtered_annotations.sample(sample_size, random_state=42)
@@ -446,6 +455,9 @@ def get_sample_objects(sample_size: int = 50) -> pd.DataFrame:
         sampled_objects = filtered_annotations
         logger.warning(f"Only {len(filtered_annotations)} objects available after filtering")
     
+    ic(sampled_objects.head())
+    ic(sampled_objects.shape)
+
     # Ensure DataFrame has expected format
     required_columns = ["fileIdentifier", "sha256", "source"]
     for col in required_columns:
@@ -453,6 +465,9 @@ def get_sample_objects(sample_size: int = 50) -> pd.DataFrame:
             logger.error(f"Required column '{col}' not found in annotations")
             raise ValueError(f"Required column '{col}' not found in annotations")
     
+    ic(sampled_objects.head())
+    ic(sampled_objects.shape)
+
     return sampled_objects
 
 
@@ -470,7 +485,7 @@ def render_objects(
     processes: Optional[int] = None,
     save_repo_format: Optional[Literal["zip", "tar", "tar.gz", "files"]] = None,
     only_northern_hemisphere: bool = False,
-    render_timeout: int = 300,
+    render_timeout: int = 900,
     gpu_devices: Optional[Union[int, List[int]]] = None,
     use_example_objects: bool = False,
     sample_size: int = 200,

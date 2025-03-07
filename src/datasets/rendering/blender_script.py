@@ -93,6 +93,17 @@ def _sample_spherical(
     return vec
 
 
+def _sample_spherical_northern_hemisphere() -> np.ndarray:
+    """Samples a point in the northern hemisphere of a sphere."""
+    theta = random.random() * 2 * math.pi
+    phi = math.acos(random.random())
+    return np.array([
+        math.sin(phi) * math.cos(theta),
+        math.sin(phi) * math.sin(theta),
+        math.cos(phi),
+    ])
+
+
 def randomize_camera(
     radius_min: float = 1.5,
     radius_max: float = 2.2,
@@ -767,6 +778,62 @@ def ensure_texture_visibility() -> None:
     return texture_count > 0
 
 
+def get_camera_positions(
+    num_renders: int,
+    only_northern_hemisphere: bool,
+    elevation_options: Optional[List[float]] = None,
+    azimuth_options: Optional[List[float]] = None,
+) -> List[Tuple[float, float, float]]:
+    """Returns a list of camera positions for rendering.
+    
+    Args:
+        num_renders (int): Number of renders to create
+        only_northern_hemisphere (bool): Whether to only render the northern hemisphere
+        elevation_options (Optional[List[float]]): Specific elevation angles to use (in degrees)
+        azimuth_options (Optional[List[float]]): Specific azimuth angles to use (in degrees)
+        
+    Returns:
+        List[Tuple[float, float, float]]: List of (x, y, z) camera positions
+    """
+    # If specific angles are provided, use them
+    if azimuth_options is not None and elevation_options is not None:
+        # Make sure we have enough angles for the requested renders
+        if len(azimuth_options) < num_renders or len(elevation_options) < num_renders:
+            print(f"Warning: Not enough angles provided. Repeating as needed.")
+            # Repeat the angles if we need more
+            azimuth_options = list(azimuth_options) * (num_renders // len(azimuth_options) + 1)
+            elevation_options = list(elevation_options) * (num_renders // len(elevation_options) + 1)
+        
+        positions = []
+        radius = 2.1  # Increased camera distance from 1.8 to 3.0
+        
+        # Use the provided angles to calculate camera positions
+        for i in range(num_renders):
+            # Negate the azimuth angle to reverse rotation direction (counter-clockwise)
+            azimuth = -math.radians(azimuth_options[i])
+            elevation = math.radians(elevation_options[i])
+            
+            # Convert spherical coordinates to Cartesian
+            x = radius * math.cos(elevation) * math.sin(azimuth)
+            y = radius * math.cos(elevation) * math.cos(azimuth)
+            z = radius * math.sin(elevation)
+            
+            positions.append((x, y, z))
+        
+        return positions
+    
+    # Fall back to the existing random sampling approach
+    positions = []
+    for _ in range(num_renders):
+        if only_northern_hemisphere:
+            pos = _sample_spherical_northern_hemisphere()
+        else:
+            pos = _sample_spherical()
+        positions.append(tuple(pos))
+    
+    return positions
+
+
 def render_object(
     object_file: str,
     num_renders: int,
@@ -842,36 +909,63 @@ def render_object(
         print(f"Using existing textures for {object_file}")
 
     # save metadata
-    metadata_path = os.path.join(output_dir, "metadata.json")
-    os.makedirs(os.path.dirname(metadata_path), exist_ok=True)
-    with open(metadata_path, "w", encoding="utf-8") as f:
-        json.dump(metadata, f, sort_keys=True, indent=2)
+    with open(os.path.join(output_dir, "metadata.json"), "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=4)
 
-    # normalize the scene
+    # normalize the scene so that the object fits in the [-0.5, 0.5]^3 cube
     normalize_scene()
 
-    # randomize the lighting
-    randomize_lighting()
+    # Set transparent background
+    set_transparent_background()
 
-    # render the images
-    for i in range(num_renders):
-        # set camera
-        camera = randomize_camera(
-            only_northern_hemisphere=only_northern_hemisphere,
-        )
+    # pre-defined angles for 360-degree view
+    azimuths = np.array([0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330]).astype(float)
+    elevations = np.array([20, -10, 20, -10, 20, -10, 20, -10, 20, -10, 20, -10]).astype(float)
+    
+    # Get the camera positions based on specified angles
+    camera_positions = get_camera_positions(
+        num_renders=num_renders,
+        only_northern_hemisphere=only_northern_hemisphere,
+        elevation_options=elevations,
+        azimuth_options=azimuths
+    )
 
-        # render the image
-        render_path = os.path.join(output_dir, f"{i:03d}.png")
-        scene.render.filepath = render_path
+    for i, pos in enumerate(camera_positions):
+        # Set camera position
+        cam.location = pos
+        
+        # Get the camera's world matrix
+        # This captures the transformation from camera space to world space
+        camera_matrix = np.array(cam.matrix_world)
+        
+        # Save the camera matrix
+        np.save(os.path.join(output_dir, f"{i:03d}.npy"), camera_matrix)
+        
+        # Set output path
+        scene.render.filepath = os.path.join(output_dir, f"{i:03d}.png")
+        
+        # Render the image
         bpy.ops.render.render(write_still=True)
 
-        # save camera RT matrix
-        rt_matrix = get_3x4_RT_matrix_from_blender(camera)
-        rt_matrix_path = os.path.join(output_dir, f"{i:03d}.npy")
-        np.save(rt_matrix_path, rt_matrix)
 
-    # save the 3d object in the output directory
-    bpy.ops.wm.save_as_mainfile(filepath=os.path.join(output_dir, "scene.blend"))
+def set_transparent_background() -> None:
+    """Sets the background to be transparent for rendering."""
+    # Configure render settings for transparency
+    bpy.context.scene.render.film_transparent = True
+    
+    # Access the world settings
+    world = bpy.data.worlds['World']
+    
+    # Use nodes to set up the background
+    world.use_nodes = True
+    bg_node = world.node_tree.nodes['Background']
+    
+    # Set the background color with alpha of 0 for transparency
+    bg_node.inputs[0].default_value = (1, 1, 1, 0)  # RGBA format with 0 alpha
+    
+    # For Cycles, make sure the background is handled properly
+    world.cycles_visibility.camera = False
+
 
 if __name__ == "__main__":
     try:
@@ -934,6 +1028,9 @@ if __name__ == "__main__":
         render.resolution_x = 1024
         render.resolution_y = 1024
         render.resolution_percentage = 100
+        
+        # Set transparent background
+        set_transparent_background()
         
         # Additional settings for better texture rendering
         if render.engine == "CYCLES":
