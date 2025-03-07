@@ -107,6 +107,21 @@ def handle_found_object(
     # Log the file type for debugging
     file_extension = os.path.splitext(local_path)[1].lower().lstrip('.')
     ic(f"File extension: {file_extension}")
+    
+    # Store the repository path for cleanup
+    repo_path = None
+    if 'github.com' in file_identifier:
+        # For GitHub, get the repo directory (parent directory of the file)
+        repo_path = os.path.dirname(os.path.dirname(local_path))
+        ic(f"GitHub repository path for cleanup: {repo_path}")
+    elif 'thingiverse.com' in file_identifier:
+        # For Thingiverse, the directory structure might be different
+        repo_path = os.path.dirname(local_path)
+        ic(f"Thingiverse directory path for cleanup: {repo_path}")
+    else:
+        # For other sources, try to get the parent directory
+        repo_path = os.path.dirname(local_path)
+        ic(f"Source directory path for cleanup: {repo_path}")
 
     # get the GPU to use for rendering
     using_gpu: bool = True
@@ -172,27 +187,39 @@ def handle_found_object(
 
         # render the object and capture ALL output
         try:
+            # Run with text=False to avoid UnicodeDecodeError
             result = subprocess.run(
                 ["bash", "-c", command],
                 timeout=render_timeout,
                 check=False,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True
+                text=False  # Changed from True to False to handle binary output
             )
             # Always log output for debugging
             ic("Return code:", result.returncode)
-            if result.stderr:
-                ic("STDERR first 10 lines:")
-                stderr_lines = result.stderr.split('\n')[:10]
-                for line in stderr_lines:
-                    ic(line)
             
+            # Safely decode stderr, ignoring problematic characters
+            if result.stderr:
+                try:
+                    stderr_text = result.stderr.decode('utf-8', errors='replace')
+                    ic("STDERR first 10 lines:")
+                    stderr_lines = stderr_text.split('\n')[:10]
+                    for line in stderr_lines:
+                        ic(line)
+                except Exception as e:
+                    ic(f"Could not decode stderr: {str(e)}")
+            
+            # Safely decode stdout, ignoring problematic characters
             if result.stdout:
-                ic("STDOUT first 10 lines:")
-                stdout_lines = result.stdout.split('\n')[:10]
-                for line in stdout_lines:
-                    ic(line)
+                try:
+                    stdout_text = result.stdout.decode('utf-8', errors='replace')
+                    ic("STDOUT first 10 lines:")
+                    stdout_lines = stdout_text.split('\n')[:10]
+                    for line in stdout_lines:
+                        ic(line)
+                except Exception as e:
+                    ic(f"Could not decode stdout: {str(e)}")
                     
             # List files in target directory
             if os.path.exists(target_directory) and os.path.isdir(target_directory):
@@ -272,6 +299,24 @@ def handle_found_object(
         # log that this object was rendered successfully
         if successful_log_file is not None:
             log_processed_object(successful_log_file, file_identifier, sha256)
+        
+        # CLEANUP: Delete the repository directory after successful rendering and transfer
+        if repo_path and os.path.exists(repo_path):
+            try:
+                # For safety, verify this is a download directory before removing
+                if any(marker in repo_path for marker in ['objaverse', 'download', 'tmp', 'temp']):
+                    ic(f"Cleaning up repository directory: {repo_path}")
+                    if os.path.isdir(repo_path):
+                        shutil.rmtree(repo_path)
+                    else:
+                        os.remove(repo_path)
+                    logger.info(f"Successfully removed repository files at {repo_path}")
+                else:
+                    # Safety check failed, log but don't delete
+                    logger.warning(f"Skipped cleanup of {repo_path} - path doesn't appear to be a temp directory")
+            except Exception as e:
+                logger.error(f"Error during repository cleanup: {str(e)}")
+                # Continue despite cleanup errors - they shouldn't affect the main process
         
         ic("Successfully rendered", file_identifier)
         return True
@@ -488,7 +533,8 @@ def render_objects(
     render_timeout: int = 900,
     gpu_devices: Optional[Union[int, List[int]]] = None,
     use_example_objects: bool = False,
-    sample_size: int = 200,
+    sample_size: int = 1000,
+    batch_size: int = 50,
 ) -> None:
     """Renders objects in the Objaverse-XL dataset with Blender"""
     if platform.system() not in ["Linux", "Darwin"]:
@@ -547,41 +593,71 @@ def render_objects(
 
     # shuffle the objects
     objects = objects.sample(frac=1).reset_index(drop=True)
-
-    # Simple download without retries for LFS errors
-    try:
-        oxl.download_objects(
-            objects=objects,
-            processes=processes,
-            save_repo_format=save_repo_format,
-            download_dir=download_dir,
-            handle_found_object=partial(
-                handle_found_object,
-                render_dir=render_dir,
-                num_renders=num_renders,
-                only_northern_hemisphere=only_northern_hemisphere,
-                gpu_devices=parsed_gpu_devices,
-                render_timeout=render_timeout,
-            ),
-            handle_new_object=handle_new_object,
-            handle_modified_object=partial(
-                handle_modified_object,
-                render_dir=render_dir,
-                num_renders=num_renders,
-                only_northern_hemisphere=only_northern_hemisphere,
-                gpu_devices=parsed_gpu_devices,
-                render_timeout=render_timeout,
-            ),
-            handle_missing_object=handle_missing_object,
-            timeout=300,  # Add timeout parameter to avoid hanging downloads
-        )
-    except subprocess.CalledProcessError as e:
-        if "git lfs" in str(e):
-            logger.error(f"Git LFS error encountered: {e}")
-            logger.info("Consider using smaller repositories or non-GitHub sources")
-        else:
-            logger.error(f"Error during download process: {e}")
-        raise
+    
+    # Group objects by source for more efficient batch processing
+    objects_by_source = {source: group for source, group in objects.groupby("source")}
+    
+    for source, source_objects in objects_by_source.items():
+        logger.info(f"Processing {len(source_objects)} objects from source: {source}")
+        
+        # Process the source's objects in batches
+        for batch_start in range(0, len(source_objects), batch_size):
+            batch_end = min(batch_start + batch_size, len(source_objects))
+            batch_objects = source_objects.iloc[batch_start:batch_end].reset_index(drop=True)
+            
+            logger.info(f"Processing batch {batch_start//batch_size + 1}/{(len(source_objects) + batch_size - 1)//batch_size} "
+                       f"({batch_start}-{batch_end-1}) from {source}")
+            
+            try:
+                # Download and process just this batch
+                oxl.download_objects(
+                    objects=batch_objects,
+                    processes=processes,
+                    save_repo_format=save_repo_format,
+                    download_dir=download_dir,
+                    handle_found_object=partial(
+                        handle_found_object,
+                        render_dir=render_dir,
+                        num_renders=num_renders,
+                        only_northern_hemisphere=only_northern_hemisphere,
+                        gpu_devices=parsed_gpu_devices,
+                        render_timeout=render_timeout,
+                    ),
+                    handle_new_object=handle_new_object,
+                    handle_modified_object=partial(
+                        handle_modified_object,
+                        render_dir=render_dir,
+                        num_renders=num_renders,
+                        only_northern_hemisphere=only_northern_hemisphere,
+                        gpu_devices=parsed_gpu_devices,
+                        render_timeout=render_timeout,
+                    ),
+                    handle_missing_object=handle_missing_object,
+                    timeout=300,  # Add timeout parameter to avoid hanging downloads
+                )
+                
+                # Force garbage collection after each batch
+                import gc
+                gc.collect()
+                
+                logger.info(f"Successfully processed batch {batch_start//batch_size + 1} from {source}")
+                
+                # Brief pause between batches to let the system stabilize
+                time.sleep(2)
+                
+            except subprocess.CalledProcessError as e:
+                if "git lfs" in str(e):
+                    logger.error(f"Git LFS error in batch {batch_start//batch_size + 1} from {source}: {e}")
+                    logger.info("Continuing with next batch")
+                else:
+                    logger.error(f"Error during batch {batch_start//batch_size + 1} download: {e}")
+                    raise
+            
+            # Log progress after each batch
+            logger.info(f"Completed {batch_end}/{len(source_objects)} objects from {source} "
+                       f"({batch_end/len(source_objects)*100:.1f}%)")
+    
+    logger.info("All objects from all sources have been processed")
 
 
 if __name__ == "__main__":
