@@ -187,40 +187,42 @@ def handle_found_object(
 
         # render the object and capture ALL output
         try:
-            # Run with text=False to avoid UnicodeDecodeError
+            # Run with text=True to handle text properly
             result = subprocess.run(
                 ["bash", "-c", command],
                 timeout=render_timeout,
                 check=False,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=False  # Changed from True to False to handle binary output
+                text=True,  # Change to True for proper text handling
+                bufsize=1   # Line buffered
             )
+            
             # Always log output for debugging
             ic("Return code:", result.returncode)
             
-            # Safely decode stderr, ignoring problematic characters
+            # Process stderr with better handling
             if result.stderr:
-                try:
-                    stderr_text = result.stderr.decode('utf-8', errors='replace')
-                    ic("STDERR first 10 lines:")
-                    stderr_lines = stderr_text.split('\n')[:10]
-                    for line in stderr_lines:
-                        ic(line)
-                except Exception as e:
-                    ic(f"Could not decode stderr: {str(e)}")
+                stderr_lines = result.stderr.splitlines()
+                ic("STDERR first 50 lines:")
+                for line in stderr_lines[:50]:
+                    ic(line)
             
-            # Safely decode stdout, ignoring problematic characters
+            # Process stdout with better handling
             if result.stdout:
-                try:
-                    stdout_text = result.stdout.decode('utf-8', errors='replace')
-                    ic("STDOUT first 10 lines:")
-                    stdout_lines = stdout_text.split('\n')[:10]
-                    for line in stdout_lines:
-                        ic(line)
-                except Exception as e:
-                    ic(f"Could not decode stdout: {str(e)}")
+                stdout_lines = result.stdout.splitlines()
+                ic("STDOUT first 50 lines:")
+                for line in stdout_lines[:50]:
+                    ic(line)
                     
+            # Look for specific debug log file
+            debug_log_path = os.path.join(target_directory, "blender_debug.log")
+            if os.path.exists(debug_log_path):
+                with open(debug_log_path, 'r') as f:
+                    debug_log = f.read()
+                    ic("BLENDER DEBUG LOG:")
+                    ic(debug_log)
+            
             # List files in target directory
             if os.path.exists(target_directory) and os.path.isdir(target_directory):
                 files = os.listdir(target_directory)
@@ -533,7 +535,7 @@ def render_objects(
     render_timeout: int = 900,
     gpu_devices: Optional[Union[int, List[int]]] = None,
     use_example_objects: bool = False,
-    sample_size: int = 1000,
+    sample_size: int = 100,
     batch_size: int = 50,
 ) -> None:
     """Renders objects in the Objaverse-XL dataset with Blender"""

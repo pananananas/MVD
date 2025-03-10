@@ -28,6 +28,21 @@ IMPORT_FUNCTIONS: Dict[str, Callable] = {
 }
 
 
+def debug_print(*args, **kwargs):
+    """Enhanced print function that ensures output is flushed immediately and logged to a file."""
+    # Print to stdout with immediate flush
+    print(*args, **kwargs, flush=True)
+    
+    # Also log to a file in the output directory if we have args.output_dir
+    try:
+        if 'args' in globals() and hasattr(args, 'output_dir'):
+            log_file = os.path.join(args.output_dir, "blender_debug.log")
+            with open(log_file, "a") as f:
+                print(*args, **kwargs, file=f)
+    except Exception as e:
+        print(f"Error logging to file: {e}", flush=True)
+
+
 def reset_cameras() -> None:
     """Resets the cameras in the scene to a single default camera."""
     # Delete all existing cameras
@@ -184,84 +199,121 @@ def _create_light(
     location: Tuple[float, float, float],
     rotation: Tuple[float, float, float],
     energy: float,
-    use_shadow: bool = False,
+    use_shadow: bool = True,
     specular_factor: float = 1.0,
+    color: Tuple[float, float, float, float] = (1.0, 1.0, 1.0, 1.0)
 ):
-    """Creates a light object.
+    """Creates a physically-based light object.
 
     Args:
         name (str): Name of the light object.
         light_type (Literal["POINT", "SUN", "SPOT", "AREA"]): Type of the light.
         location (Tuple[float, float, float]): Location of the light.
         rotation (Tuple[float, float, float]): Rotation of the light.
-        energy (float): Energy of the light.
-        use_shadow (bool, optional): Whether to use shadows. Defaults to False.
+        energy (float): Energy/intensity of the light in physical units.
+        use_shadow (bool, optional): Whether to use shadows. Defaults to True.
         specular_factor (float, optional): Specular factor of the light. Defaults to 1.0.
+        color (Tuple[float, float, float, float], optional): RGBA color. Defaults to white.
 
     Returns:
         bpy.types.Object: The light object.
     """
-
     light_data = bpy.data.lights.new(name=name, type=light_type)
     light_object = bpy.data.objects.new(name, light_data)
     bpy.context.collection.objects.link(light_object)
     light_object.location = location
     light_object.rotation_euler = rotation
+    
+    # Physical light properties
     light_data.use_shadow = use_shadow
     light_data.specular_factor = specular_factor
     light_data.energy = energy
+    light_data.color = color[:3]  # RGB only, no alpha
+    
+    # Additional physical properties based on light type
+    if light_type == 'AREA':
+        light_data.shape = 'RECTANGLE'
+        light_data.size = 1.0
+        light_data.size_y = 1.0
+    elif light_type == 'SPOT':
+        light_data.spot_size = math.radians(45.0)  # 45 degree spot angle
+        light_data.spot_blend = 0.15  # Soft edge
+    
     return light_object
 
 
 def randomize_lighting() -> Dict[str, bpy.types.Object]:
-    """Randomizes the lighting in the scene.
+    """Creates a physically-based lighting setup with exposure control.
 
     Returns:
-        Dict[str, bpy.types.Object]: Dictionary of the lights in the scene. The keys are
-            "key_light", "fill_light", "rim_light", and "bottom_light".
+        Dict[str, bpy.types.Object]: Dictionary of the lights in the scene.
     """
-
     # Clear existing lights
     bpy.ops.object.select_all(action="DESELECT")
     bpy.ops.object.select_by_type(type="LIGHT")
     bpy.ops.object.delete()
 
-    # Create key light
+    # Set exposure for the scene - this helps normalize overall brightness
+    scene = bpy.context.scene
+    if scene.render.engine == 'CYCLES':
+        scene.view_settings.exposure = 0.0  # Baseline exposure
+        scene.view_settings.gamma = 1.0
+    else:  # EEVEE
+        # For EEVEE, we'll control exposure through light intensity
+        pass
+
+    # Create physically based key light
     key_light = _create_light(
         name="Key_Light",
         light_type="SUN",
         location=(0, 0, 0),
-        rotation=(0.785398, 0, -0.785398),
-        energy=random.choice([3, 4, 5]),
+        rotation=(0.785398, 0, -0.785398),  # 45 degrees rotation
+        energy=3.0,  # Fixed baseline energy
+        use_shadow=True,
     )
-
-    # Create fill light
+    
+    # Create physically based fill light (softer, less intense)
     fill_light = _create_light(
         name="Fill_Light",
         light_type="SUN",
         location=(0, 0, 0),
-        rotation=(0.785398, 0, 2.35619),
-        energy=random.choice([2, 3, 4]),
+        rotation=(0.785398, 0, 2.35619),  # About 135 degrees
+        energy=1.5,  # Half the key light energy
+        use_shadow=True,
     )
-
-    # Create rim light
+    
+    # Create physically based rim light (for edge highlighting)
     rim_light = _create_light(
         name="Rim_Light",
         light_type="SUN",
         location=(0, 0, 0),
-        rotation=(-0.785398, 0, -3.92699),
-        energy=random.choice([3, 4, 5]),
+        rotation=(-0.785398, 0, -3.92699),  # About 225 degrees
+        energy=2.5,  # Slightly less than key light
+        use_shadow=False,  # No shadows for rim light to keep it clean
     )
-
-    # Create bottom light
+    
+    # Create physically based bottom light (for fill shadows)
     bottom_light = _create_light(
         name="Bottom_Light",
         light_type="SUN",
         location=(0, 0, 0),
-        rotation=(3.14159, 0, 0),
-        energy=random.choice([1, 2, 3]),
+        rotation=(3.14159, 0, 0),  # 180 degrees (from bottom)
+        energy=1.0,  # Subtle fill light
+        use_shadow=False,
     )
-
+    
+    # If using Cycles, set up additional physical properties
+    if scene.render.engine == 'CYCLES':
+        for light in [key_light, fill_light, rim_light, bottom_light]:
+            light.data.use_nodes = True
+            nodes = light.data.node_tree.nodes
+            # Access the emission node that controls the light
+            emission = nodes.get('Emission')
+            if emission:
+                # For sun lights, we don't need to adjust strength further
+                # The energy parameter already sets the appropriate value
+                pass
+                
     return dict(
         key_light=key_light,
         fill_light=fill_light,
@@ -453,40 +505,83 @@ def delete_invisible_objects() -> None:
 def normalize_scene() -> None:
     """Normalizes the scene by scaling and translating it to fit in a unit cube centered
     at the origin.
-
-    Mostly taken from the Point-E / Shap-E rendering script
-    (https://github.com/openai/point-e/blob/main/point_e/evals/scripts/blender_script.py#L97-L112),
-    but fix for multiple root objects: (see bug report here:
-    https://github.com/openai/shap-e/pull/60).
-
-    Returns:
-        None
     """
-    if len(list(get_scene_root_objects())) > 1:
-        # create an empty object to be used as a parent for all root objects
-        parent_empty = bpy.data.objects.new("ParentEmpty", None)
-        bpy.context.scene.collection.objects.link(parent_empty)
+    # Ensure we're in object mode
+    if bpy.context.active_object and bpy.context.active_object.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+    
+    # First, get all mesh objects and ensure they're selected
+    mesh_objects = list(get_scene_meshes())
+    if len(mesh_objects) == 0:
+        debug_print("WARNING: No mesh objects found in scene to normalize!")
+        return
+    
+    # Step 1: Remove any parent relationships that might interfere with transforms
+    for obj in mesh_objects:
+        obj.parent = None
 
-        # parent all root objects to the empty object
-        for obj in get_scene_root_objects():
-            if obj != parent_empty:
-                obj.parent = parent_empty
+    # Select all mesh objects
+    bpy.ops.object.select_all(action='DESELECT')
+    for obj in mesh_objects:
+        obj.select_set(True)
 
+    # Step 2: Calculate the bounds of the entire scene
     bbox_min, bbox_max = scene_bbox()
-    scale = 1 / max(bbox_max - bbox_min)
-    for obj in get_scene_root_objects():
-        obj.scale = obj.scale * scale
-
-    # Apply scale to matrix_world.
+    scene_center = (bbox_min + bbox_max) / 2
+    size = bbox_max - bbox_min
+    max_dim = max(size.x, size.y, size.z)
+    scale_factor = 1.0 / max_dim if max_dim > 0 else 1.0
+    
+    debug_print(f"Initial bounds: min={bbox_min}, max={bbox_max}, center={scene_center}")
+    debug_print(f"Scale factor: {scale_factor}")
+    
+    # Step 3: Join all objects temporarily for easier manipulation
+    # This is the most direct way to ensure everything is centered together
+    if len(mesh_objects) > 1:
+        # Set the active object
+        bpy.context.view_layer.objects.active = mesh_objects[0]
+        # Join all selected objects
+        bpy.ops.object.join()
+        # Get the joined object
+        joined_object = bpy.context.active_object
+        mesh_objects = [joined_object]
+    
+    # Step 4: Set the origin to geometry
+    bpy.ops.object.origin_set(type='ORIGIN_GEOMETRY', center='BOUNDS')
+    
+    # Step 5: Move the object to center
+    main_obj = mesh_objects[0]
+    main_obj.location = -scene_center
+    
+    # Apply location
+    bpy.ops.object.transform_apply(location=True, rotation=False, scale=False)
+    
+    # Step 6: Scale the object
+    main_obj.scale *= scale_factor
+    
+    # Apply scale
+    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+    
+    # Verify
     bpy.context.view_layer.update()
-    bbox_min, bbox_max = scene_bbox()
-    offset = -(bbox_min + bbox_max) / 2
-    for obj in get_scene_root_objects():
-        obj.matrix_world.translation += offset
-    bpy.ops.object.select_all(action="DESELECT")
-
-    # unparent the camera
-    bpy.data.objects["Camera"].parent = None
+    v_min, v_max = scene_bbox()
+    v_center = (v_min + v_max) / 2
+    
+    debug_print(f"After normalization: min={v_min}, max={v_max}, center={v_center}")
+    
+    # If still not centered, force it with a brute-force approach
+    if v_center.length > 0.01:
+        debug_print(f"EMERGENCY CENTERING NEEDED! Center is still at {v_center}")
+        
+        # Direct manual offset
+        main_obj.location = -v_center
+        bpy.ops.object.transform_apply(location=True, rotation=False, scale=False)
+        
+        # Final verification
+        bpy.context.view_layer.update()
+        final_min, final_max = scene_bbox()
+        final_center = (final_min + final_max) / 2
+        debug_print(f"FINAL CHECK: Center at {final_center}")
 
 
 def delete_missing_textures() -> Dict[str, Any]:
@@ -805,7 +900,7 @@ def get_camera_positions(
             elevation_options = list(elevation_options) * (num_renders // len(elevation_options) + 1)
         
         positions = []
-        radius = 2.1  # Increased camera distance from 1.8 to 3.0
+        radius = 1.8 
         
         # Use the provided angles to calculate camera positions
         for i in range(num_renders):
@@ -879,8 +974,10 @@ def render_object(
     scene.collection.objects.link(empty)
     cam_constraint.target = empty
 
-    # Extract the metadata. This must be done before normalizing the scene to get
-    # accurate bounding box information.
+    # Setup physical render settings
+    setup_physical_render_settings()
+
+    # Extract the metadata
     metadata_extractor = MetadataExtractor(
         object_path=object_file, scene=scene, bdata=bpy.data
     )
@@ -913,11 +1010,22 @@ def render_object(
         json.dump(metadata, f, indent=4)
 
     # normalize the scene so that the object fits in the [-0.5, 0.5]^3 cube
+    # Use align_to_world=False to preserve original orientation
     normalize_scene()
+
+    # Log to verify normalization worked correctly
+    bbox_min, bbox_max = scene_bbox()
+    print(f"After normalization - Bounding box min: {bbox_min}, max: {bbox_max}, center: {(bbox_min + bbox_max)/2}")
+
+    # Save the Blender scene for debugging
+    bpy.ops.wm.save_as_mainfile(filepath=os.path.join(output_dir, "scene.blend"))
 
     # Set transparent background
     set_transparent_background()
 
+    # Create physically-based lighting
+    lights = randomize_lighting()
+    
     # pre-defined angles for 360-degree view
     azimuths = np.array([0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330]).astype(float)
     elevations = np.array([20, -10, 20, -10, 20, -10, 20, -10, 20, -10, 20, -10]).astype(float)
@@ -967,6 +1075,39 @@ def set_transparent_background() -> None:
     world.cycles_visibility.camera = False
 
 
+def setup_physical_render_settings():
+    """Configure render settings for physically-based rendering."""
+    scene = bpy.context.scene
+    render = scene.render
+    
+    # Common settings for both engines
+    render.use_motion_blur = False
+    
+    if render.engine == 'CYCLES':
+        # Cycles specific settings
+        scene.cycles.use_animated_seed = False
+        scene.cycles.samples = 128
+        scene.cycles.use_denoising = True
+        scene.cycles.max_bounces = 8
+        scene.cycles.diffuse_bounces = 3
+        scene.cycles.glossy_bounces = 4
+        scene.cycles.transparent_max_bounces = 8
+        
+        # Color management for realistic rendering
+        scene.view_settings.view_transform = 'Filmic'
+        scene.view_settings.look = 'None'
+    else:
+        # EEVEE specific settings
+        scene.eevee.taa_render_samples = 32
+        scene.eevee.use_gtao = True
+        scene.eevee.use_bloom = False
+        scene.eevee.use_ssr = True
+        scene.eevee.use_ssr_refraction = True
+        
+        # Color management
+        scene.view_settings.view_transform = 'Standard'
+
+
 if __name__ == "__main__":
     try:
         parser = argparse.ArgumentParser()
@@ -1010,9 +1151,13 @@ if __name__ == "__main__":
         argv = sys.argv[sys.argv.index("--") + 1 :]
         args = parser.parse_args(argv)
         
-        with open(os.path.join(args.output_dir, "script_started.txt"), "w") as f:
-            f.write("Blender script started\n")
+        # Create a debug log file
+        os.makedirs(args.output_dir, exist_ok=True)
+        with open(os.path.join(args.output_dir, "blender_debug.log"), "w") as f:
+            f.write(f"Blender script started at {datetime.datetime.now()}\n")
             f.write(f"Args: {args}\n")
+            f.write(f"Python version: {sys.version}\n")
+            f.write(f"Blender version: {bpy.app.version_string}\n")
         
         print(f"Script started with args: {args}")
         print(f"Output directory: {args.output_dir}")
