@@ -916,22 +916,14 @@ def render_object(
     only_northern_hemisphere: bool,
     output_dir: str,
 ) -> None:
-    """Saves rendered images with its camera matrix and metadata of the object.
-
-    Args:
-        object_file (str): Path to the object file.
-        num_renders (int): Number of renders to save of the object.
-        only_northern_hemisphere (bool): Whether to only render sides of the object that
-            are in the northern hemisphere. This is useful for rendering objects that
-            are photogrammetrically scanned, as the bottom of the object often has
-            holes.
-        output_dir (str): Path to the directory where the rendered images and metadata
-            will be saved.
-
-    Returns:
-        None
-    """
+    """Saves rendered images with its camera matrix and metadata of the object."""
     os.makedirs(output_dir, exist_ok=True)
+    
+    # Log the input parameters
+    debug_print(f"render_object called with num_renders={num_renders}")
+    debug_print(f"Object file: {object_file}")
+    debug_print(f"Output directory: {output_dir}")
+    debug_print(f"Only northern hemisphere: {only_northern_hemisphere}")
 
     # load the object
     if object_file.endswith(".blend"):
@@ -1007,9 +999,16 @@ def render_object(
     # Create physically-based lighting
     lights = randomize_lighting()
     
-    # pre-defined angles for 360-degree view
-    azimuths = np.array([0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330]).astype(float)
-    elevations = np.array([20, -10, 20, -10, 20, -10, 20, -10, 20, -10, 20, -10]).astype(float)
+    # pre-defined angles for 360-degree views
+    if num_renders == 12:
+        azimuths = np.array([0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330]).astype(float)
+        elevations = np.array([20, -10, 20, -10, 20, -10, 20, -10, 20, -10, 20, -10]).astype(float)
+    elif num_renders == 8:
+        azimuths = np.array([0, 45, 90, 135, 180, 225, 270, 315]).astype(float)
+        elevations = np.array([20, -10, 20, -10, 20, -10, 20, -10]).astype(float)
+    elif num_renders == 6:
+        azimuths = np.array([30, 90, 150, 210, 270, 330]).astype(float)
+        elevations = np.array([20, -10, 20, -10, 20, -10]).astype(float)
     
     # Get the camera positions based on specified angles
     camera_positions = get_camera_positions(
@@ -1117,12 +1116,6 @@ if __name__ == "__main__":
             default=False,
         )
         parser.add_argument(
-            "--num_renders",
-            type=int,
-            default=12,
-            help="Number of renders to save of the object.",
-        )
-        parser.add_argument(
             "--verbose",
             action="store_true",
             help="Print verbose output",
@@ -1170,11 +1163,19 @@ if __name__ == "__main__":
         # Write another marker
         with open(os.path.join(args.output_dir, "before_render.txt"), "w") as f:
             f.write("About to start rendering\n")
-
+        
+        # Random num_renders 6, 8 or 12
+        num_renders = random.choice([6, 8, 12])
+        debug_print(f"Selected random number of renders: {num_renders}")
+        
+        # Save the chosen number to a file for main.py to read
+        with open(os.path.join(args.output_dir, "num_renders.txt"), "w") as f:
+            f.write(str(num_renders))
+        
         # Render the images
         render_object(
             object_file=args.object_path,
-            num_renders=args.num_renders,
+            num_renders=num_renders,
             only_northern_hemisphere=args.only_northern_hemisphere,
             output_dir=args.output_dir,
         )
@@ -1193,7 +1194,8 @@ if __name__ == "__main__":
             render_stats = {
                 "resolution": f"{render.resolution_x}x{render.resolution_y}",
                 "percentage": f"{render.resolution_percentage}%",
-                "engine": args.engine
+                "engine": args.engine,
+                "num_renders": num_renders  # Include the random number in stats
             }
             
             if args.engine == "CYCLES":

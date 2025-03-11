@@ -101,7 +101,7 @@ def handle_found_object(
     Returns: True if the object was rendered successfully, False otherwise.
     """
     save_uid = get_uid_from_str(file_identifier)
-    args = f"--object_path '{local_path}' --num_renders {num_renders}"
+    args = f"--object_path '{local_path}' --output_dir"
     ic(local_path, save_uid)
     
     # Log the file type for debugging
@@ -142,7 +142,7 @@ def handle_found_object(
         # get the target directory for the rendering job
         target_directory = os.path.join(temp_dir, save_uid)
         os.makedirs(target_directory, exist_ok=True)
-        args += f" --output_dir {target_directory}"
+        args += f" {target_directory}"
 
         # Check if blender_script.py exists and copy it to the temp directory
         if not os.path.exists("blender_script.py"):
@@ -233,6 +233,17 @@ def handle_found_object(
                     ic("BLENDER DEBUG LOG:")
                     ic(debug_log)
             
+            # Check for the num_renders.txt file that contains the actual number of renders
+            actual_num_renders = num_renders  # Default to the original value
+            num_renders_path = os.path.join(target_directory, "num_renders.txt")
+            if os.path.exists(num_renders_path):
+                try:
+                    with open(num_renders_path, 'r') as f:
+                        actual_num_renders = int(f.read().strip())
+                        ic(f"Found actual num_renders: {actual_num_renders}")
+                except Exception as e:
+                    ic(f"Error reading num_renders.txt: {str(e)}")
+            
             # List files in target directory
             if os.path.exists(target_directory) and os.path.isdir(target_directory):
                 files = os.listdir(target_directory)
@@ -263,14 +274,16 @@ def handle_found_object(
         metadata_files = glob.glob(os.path.join(target_directory, "*.json"))
         npy_files = glob.glob(os.path.join(target_directory, "*.npy"))
         ic(f"Found files: {len(png_files)} PNGs, {len(metadata_files)} JSONs, {len(npy_files)} NPYs")
+        ic(f"Expected files: {actual_num_renders} PNGs, 1 JSON, {actual_num_renders} NPYs")
         
         if (
-            (len(png_files) != num_renders)
-            or (len(npy_files) != num_renders)
+            (len(png_files) != actual_num_renders)
+            or (len(npy_files) != actual_num_renders)
             or (len(metadata_files) != 1)
         ):
             logger.error(
-                f"Found object {file_identifier} was not rendered successfully!"
+                f"Found object {file_identifier} was not rendered successfully! "
+                f"Expected {actual_num_renders} renders, got {len(png_files)} PNGs and {len(npy_files)} NPYs."
             )
             if failed_log_file is not None:
                 log_processed_object(
@@ -288,6 +301,7 @@ def handle_found_object(
         metadata_file["file_identifier"] = file_identifier
         metadata_file["save_uid"] = save_uid
         metadata_file["metadata"] = metadata
+        metadata_file["num_renders"] = actual_num_renders  # Add the actual number to metadata
         with open(metadata_path, "w", encoding="utf-8") as f:
             json.dump(metadata_file, f, indent=2, sort_keys=True)
 
@@ -469,7 +483,7 @@ def get_sample_objects(sample_size: int = 50) -> pd.DataFrame:
         pd.DataFrame: DataFrame containing the sampled objects.
     """
     logger.info("Fetching annotations from Objaverse-XL...")
-    annotations = oxl.get_annotations(download_dir='/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse_test')
+    annotations = oxl.get_annotations(download_dir='/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse')
     logger.info(f"Retrieved {len(annotations)} total annotations")
     
     # Filter to preferred formats - prioritizing formats less likely to use Git LFS
@@ -536,7 +550,7 @@ def get_example_objects() -> pd.DataFrame:
 
 
 def render_objects(
-    render_dir: str = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse_test",
+    render_dir: str = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse",
     download_dir: Optional[str] = None,
     num_renders: int = 12,
     processes: Optional[int] = None,
