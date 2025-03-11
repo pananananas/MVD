@@ -161,38 +161,6 @@ def randomize_camera(
     return camera
 
 
-def _set_camera_at_size(i: int, scale: float = 1.5) -> bpy.types.Object:
-    """Debugging function to set the camera on the 6 faces of a cube.
-
-    Args:
-        i (int): Index of the face of the cube.
-        scale (float, optional): Scale of the cube. Defaults to 1.5.
-
-    Returns:
-        bpy.types.Object: The camera object.
-    """
-    if i == 0:
-        x, y, z = scale, 0, 0
-    elif i == 1:
-        x, y, z = -scale, 0, 0
-    elif i == 2:
-        x, y, z = 0, scale, 0
-    elif i == 3:
-        x, y, z = 0, -scale, 0
-    elif i == 4:
-        x, y, z = 0, 0, scale
-    elif i == 5:
-        x, y, z = 0, 0, -scale
-    else:
-        raise ValueError(f"Invalid index: i={i}, must be int in range [0, 5].")
-    camera = bpy.data.objects["Camera"]
-    camera.location = Vector(np.array([x, y, z]))
-    direction = -camera.location
-    rot_quat = direction.to_track_quat("-Z", "Y")
-    camera.rotation_euler = rot_quat.to_euler()
-    return camera
-
-
 def _create_light(
     name: str,
     light_type: Literal["POINT", "SUN", "SPOT", "AREA"],
@@ -510,78 +478,101 @@ def normalize_scene() -> None:
     if bpy.context.active_object and bpy.context.active_object.mode != 'OBJECT':
         bpy.ops.object.mode_set(mode='OBJECT')
     
-    # First, get all mesh objects and ensure they're selected
-    mesh_objects = list(get_scene_meshes())
-    if len(mesh_objects) == 0:
-        debug_print("WARNING: No mesh objects found in scene to normalize!")
+    # Get all objects that should be normalized (not cameras or lights)
+    objects_to_normalize = [obj for obj in bpy.context.scene.objects 
+                           if obj.type not in {'CAMERA', 'LIGHT', 'EMPTY'}]
+    
+    if len(objects_to_normalize) == 0:
+        debug_print("WARNING: No objects found in scene to normalize!")
         return
     
-    # Step 1: Remove any parent relationships that might interfere with transforms
-    for obj in mesh_objects:
-        obj.parent = None
-
-    # Select all mesh objects
-    bpy.ops.object.select_all(action='DESELECT')
-    for obj in mesh_objects:
-        obj.select_set(True)
-
-    # Step 2: Calculate the bounds of the entire scene
+    # Step 1: Calculate the bounds of the entire scene
     bbox_min, bbox_max = scene_bbox()
     scene_center = (bbox_min + bbox_max) / 2
     size = bbox_max - bbox_min
     max_dim = max(size.x, size.y, size.z)
-    scale_factor = 1.0 / max_dim if max_dim > 0 else 1.0
+    
+    if max_dim < 0.0001:
+        debug_print("WARNING: Scene has effectively zero size. Using default scale.")
+        scale_factor = 1.0
+    else:
+        scale_factor = 1.0 / max_dim
     
     debug_print(f"Initial bounds: min={bbox_min}, max={bbox_max}, center={scene_center}")
     debug_print(f"Scale factor: {scale_factor}")
     
-    # Step 3: Join all objects temporarily for easier manipulation
-    # This is the most direct way to ensure everything is centered together
-    if len(mesh_objects) > 1:
-        # Set the active object
-        bpy.context.view_layer.objects.active = mesh_objects[0]
-        # Join all selected objects
-        bpy.ops.object.join()
-        # Get the joined object
-        joined_object = bpy.context.active_object
-        mesh_objects = [joined_object]
+    # Create a temporary parent for all objects to ensure uniform scaling and translation
+    temp_parent = bpy.data.objects.new("TempScaleParent", None)
+    bpy.context.collection.objects.link(temp_parent)
     
-    # Step 4: Set the origin to geometry
-    bpy.ops.object.origin_set(type='ORIGIN_GEOMETRY', center='BOUNDS')
+    # Store original parent relationships and link all objects to the temp parent
+    original_parents = {}
+    for obj in objects_to_normalize:
+        original_parents[obj] = obj.parent
+        # Apply any pending transforms to avoid issues
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+        # Parent to the temp object WITHOUT changing the visual transform
+        obj.parent = temp_parent
     
-    # Step 5: Move the object to center
-    main_obj = mesh_objects[0]
-    main_obj.location = -scene_center
+    # Scale the parent (this affects all children uniformly without changing their relative positions)
+    temp_parent.scale = Vector((scale_factor, scale_factor, scale_factor))
+    # Move to center
+    temp_parent.location = -scene_center * scale_factor
     
-    # Apply location
-    bpy.ops.object.transform_apply(location=True, rotation=False, scale=False)
+    # Update the scene
+    bpy.context.view_layer.update()
     
-    # Step 6: Scale the object
-    main_obj.scale *= scale_factor
+    # Apply transformations while preserving relative positions
+    bpy.ops.object.select_all(action='DESELECT')
+    for obj in objects_to_normalize:
+        obj.select_set(True)
+    temp_parent.select_set(True)
+    bpy.context.view_layer.objects.active = temp_parent
     
-    # Apply scale
-    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+    # This preserves visual transforms when clearing parent
+    bpy.ops.object.parent_clear(type='CLEAR_KEEP_TRANSFORM')
     
-    # Verify
+    # Clean up - remove the temporary parent
+    bpy.ops.object.select_all(action='DESELECT')
+    temp_parent.select_set(True)
+    bpy.ops.object.delete()
+    
+    # Verify the result
     bpy.context.view_layer.update()
     v_min, v_max = scene_bbox()
     v_center = (v_min + v_max) / 2
+    v_size = v_max - v_min
     
     debug_print(f"After normalization: min={v_min}, max={v_max}, center={v_center}")
+    debug_print(f"Normalized size: {v_size}")
     
-    # If still not centered, force it with a brute-force approach
-    if v_center.length > 0.01:
-        debug_print(f"EMERGENCY CENTERING NEEDED! Center is still at {v_center}")
+    # Emergency correction - do direct transformation if still not centered
+    if v_center.length > 0.01 or max(v_size) > 1.1:
+        debug_print(f"Emergency correction needed. Center at {v_center}, size={v_size}")
         
-        # Direct manual offset
-        main_obj.location = -v_center
-        bpy.ops.object.transform_apply(location=True, rotation=False, scale=False)
+        # Apply direct correction to each object
+        correction_scale = 1.0
+        if max(v_size) > 1.1:
+            correction_scale = 1.0 / max(v_size)
+            debug_print(f"Applying emergency scaling: {correction_scale}")
+        
+        for obj in objects_to_normalize:
+            if correction_scale != 1.0:
+                obj.scale = obj.scale * correction_scale
+            obj.location = obj.location - v_center
         
         # Final verification
         bpy.context.view_layer.update()
         final_min, final_max = scene_bbox()
         final_center = (final_min + final_max) / 2
-        debug_print(f"FINAL CHECK: Center at {final_center}")
+        final_size = final_max - final_min
+        debug_print(f"FINAL CHECK: Center at {final_center}, size={final_size}")
+    
+    # Make sure the camera is not parented to any object
+    camera = bpy.data.objects.get("Camera")
+    if camera and camera.parent:
+        camera.parent = None
 
 
 def delete_missing_textures() -> Dict[str, Any]:
@@ -879,17 +870,7 @@ def get_camera_positions(
     elevation_options: Optional[List[float]] = None,
     azimuth_options: Optional[List[float]] = None,
 ) -> List[Tuple[float, float, float]]:
-    """Returns a list of camera positions for rendering.
-    
-    Args:
-        num_renders (int): Number of renders to create
-        only_northern_hemisphere (bool): Whether to only render the northern hemisphere
-        elevation_options (Optional[List[float]]): Specific elevation angles to use (in degrees)
-        azimuth_options (Optional[List[float]]): Specific azimuth angles to use (in degrees)
-        
-    Returns:
-        List[Tuple[float, float, float]]: List of (x, y, z) camera positions
-    """
+    """Returns a list of camera positions for rendering."""
     # If specific angles are provided, use them
     if azimuth_options is not None and elevation_options is not None:
         # Make sure we have enough angles for the requested renders
@@ -900,7 +881,7 @@ def get_camera_positions(
             elevation_options = list(elevation_options) * (num_renders // len(elevation_options) + 1)
         
         positions = []
-        radius = 1.8 
+        radius = 1.8  # Fixed camera distance
         
         # Use the provided angles to calculate camera positions
         for i in range(num_renders):
@@ -909,8 +890,8 @@ def get_camera_positions(
             elevation = math.radians(elevation_options[i])
             
             # Convert spherical coordinates to Cartesian
-            x = radius * math.cos(elevation) * math.sin(azimuth)
-            y = radius * math.cos(elevation) * math.cos(azimuth)
+            x = radius * math.cos(elevation) * math.cos(azimuth)
+            y = radius * math.cos(elevation) * math.sin(azimuth)
             z = radius * math.sin(elevation)
             
             positions.append((x, y, z))
@@ -921,9 +902,9 @@ def get_camera_positions(
     positions = []
     for _ in range(num_renders):
         if only_northern_hemisphere:
-            pos = _sample_spherical_northern_hemisphere()
+            pos = _sample_spherical_northern_hemisphere() * 1.8  # Apply consistent radius
         else:
-            pos = _sample_spherical()
+            pos = _sample_spherical() 
         positions.append(tuple(pos))
     
     return positions

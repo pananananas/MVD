@@ -187,38 +187,48 @@ def handle_found_object(
 
         # render the object and capture ALL output
         try:
-            # Run with text=True to handle text properly
+            # Run with text=False to handle binary output
             result = subprocess.run(
                 ["bash", "-c", command],
                 timeout=render_timeout,
                 check=False,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,  # Change to True for proper text handling
-                bufsize=1   # Line buffered
+                text=False,  # Change to False to handle binary data
+                bufsize=1    # Line buffered
             )
             
             # Always log output for debugging
             ic("Return code:", result.returncode)
             
-            # Process stderr with better handling
+            # Process stderr with better handling for binary data
             if result.stderr:
-                stderr_lines = result.stderr.splitlines()
-                ic("STDERR first 50 lines:")
-                for line in stderr_lines[:50]:
-                    ic(line)
+                try:
+                    stderr_text = result.stderr.decode('utf-8', errors='replace')
+                    stderr_lines = stderr_text.splitlines()
+                    ic("STDERR first 50 lines:")
+                    for line in stderr_lines[:50]:
+                        ic(line)
+                except Exception as e:
+                    ic(f"Error decoding stderr: {str(e)}")
+                    ic(f"Raw stderr length: {len(result.stderr)} bytes")
             
-            # Process stdout with better handling
+            # Process stdout with better handling for binary data
             if result.stdout:
-                stdout_lines = result.stdout.splitlines()
-                ic("STDOUT first 50 lines:")
-                for line in stdout_lines[:50]:
-                    ic(line)
+                try:
+                    stdout_text = result.stdout.decode('utf-8', errors='replace')
+                    stdout_lines = stdout_text.splitlines()
+                    ic("STDOUT first 50 lines:")
+                    for line in stdout_lines[:50]:
+                        ic(line)
+                except Exception as e:
+                    ic(f"Error decoding stdout: {str(e)}")
+                    ic(f"Raw stdout length: {len(result.stdout)} bytes")
                     
             # Look for specific debug log file
             debug_log_path = os.path.join(target_directory, "blender_debug.log")
             if os.path.exists(debug_log_path):
-                with open(debug_log_path, 'r') as f:
+                with open(debug_log_path, 'r', encoding='utf-8', errors='replace') as f:
                     debug_log = f.read()
                     ic("BLENDER DEBUG LOG:")
                     ic(debug_log)
@@ -459,7 +469,7 @@ def get_sample_objects(sample_size: int = 50) -> pd.DataFrame:
         pd.DataFrame: DataFrame containing the sampled objects.
     """
     logger.info("Fetching annotations from Objaverse-XL...")
-    annotations = oxl.get_annotations(download_dir='/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse')
+    annotations = oxl.get_annotations(download_dir='/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse_test')
     logger.info(f"Retrieved {len(annotations)} total annotations")
     
     # Filter to preferred formats - prioritizing formats less likely to use Git LFS
@@ -526,7 +536,7 @@ def get_example_objects() -> pd.DataFrame:
 
 
 def render_objects(
-    render_dir: str = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse",
+    render_dir: str = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse_test",
     download_dir: Optional[str] = None,
     num_renders: int = 12,
     processes: Optional[int] = None,
