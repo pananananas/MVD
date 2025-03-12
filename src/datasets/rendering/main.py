@@ -559,7 +559,7 @@ def render_objects(
     render_timeout: int = 900,
     gpu_devices: Optional[Union[int, List[int]]] = None,
     use_example_objects: bool = False,
-    sample_size: int = 100,
+    sample_size: int = 1_000_000,
     batch_size: int = 50,
 ) -> None:
     """Renders objects in the Objaverse-XL dataset with Blender"""
