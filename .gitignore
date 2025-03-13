@@ -13,5 +13,6 @@ wandb/
 outputs/
 outputs_old/
 logs/
+renders/
 .env
 .env.local

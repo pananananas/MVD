@@ -1,8 +1,8 @@
 # TODO:
 Data:
 - [x] download benchmark dataset 
-- [ ] nowy data loader do objaverse-xl
-- [ ] add a prompt.txt for every file of the dataset
+- [x] nowy data loader do objaverse-xl
+- [ ] add a prompt.txt for every file in the dataset
 
 Model:
 - [ ] Camera encoding
