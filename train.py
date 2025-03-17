@@ -1,8 +1,8 @@
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor
-from src.datasets.objaverse_dataset import ObjaverseDataModule
+from src.data.objaverse_dataset import ObjaverseDataModule
 from pytorch_lightning.loggers import WandbLogger
-from src.training import MVDLightningModule
-from src.mvd import create_mvd_pipeline
+from src.training.training import MVDLightningModule
+from src.models.mvd_unet import create_mvd_pipeline
 from pytorch_lightning import Trainer
 from pathlib import Path
 import argparse
@@ -32,7 +32,7 @@ def main(config):
         data_root=dataset_path,
         batch_size=config['batch_size'],
         num_workers=config['num_workers'],
-        target_size=(1024, 1024),
+        target_size=(config['image_size'][0], config['image_size'][1]),
         max_views_per_object=config['max_views_per_object'],
         max_samples=config['max_samples'],
     )
@@ -68,6 +68,10 @@ def main(config):
         LearningRateMonitor(logging_interval='step'),
     ]
     
+    # Convert torch_dtype to proper Lightning precision format
+    precision_value = "32" if config['torch_dtype'] == 'float32' else "16"
+    print(f"Using PyTorch Lightning precision: {precision_value}")
+    
     trainer = Trainer(
         accelerator="auto",
         devices=config['num_gpus'],
@@ -79,7 +83,7 @@ def main(config):
         val_check_interval=config['val_check_interval'],
         log_every_n_steps=1,  # Log every step for better monitoring
         deterministic=False,  # For better performance
-        precision="32-true",  # Use true FP32 for stability
+        precision=precision_value,  # Use the proper precision format for Lightning
     )
     
     trainer.fit(model, data_module)

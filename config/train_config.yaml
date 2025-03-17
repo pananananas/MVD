@@ -5,21 +5,21 @@ use_memory_efficient_attention: true
 enable_gradient_checkpointing: true
 
 # Training parameters
-learning_rate: 0.0002
-epochs: 10
-batch_size: 4
+learning_rate: 0.0001
+epochs: 30
+batch_size: 1
 num_gpus: 1
 gradient_accumulation_steps: 4
 max_grad_norm: 1.0
-val_check_interval: 4
+val_check_interval: 0.5  # Check validation every half epoch
 
 # Dataset parameters
 dataset: Objaverse
 image_size:
-- 768
-- 768
-max_views_per_object: 10
-max_samples: 1
+- 512
+- 512
+max_views_per_object: 6
+max_samples: 1  # Set to null for full dataset
 
 # Loss parameters
 perceptual_weight: 0.1
@@ -27,8 +27,8 @@ ssim_weight: 0.05
 geometric_weight: 0.1
 
 # Checkpoint parameters
-early_stopping_patience: 20
-max_checkpoints: 5
+early_stopping_patience: 10
+max_checkpoints: 3
 
 # Debug parameters
 debug: false

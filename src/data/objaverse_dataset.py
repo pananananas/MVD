@@ -202,14 +202,10 @@ class ObjaverseDataset(Dataset):
         return {
             'object_uid': object_uid,
             'prompt': pair_info['prompt'],
-            'source': {
-                'image': source_img_tensor,
-                'camera': source_cam_tensor,
-            },
-            'target': {
-                'image': target_img_tensor,
-                'camera': target_cam_tensor,
-            },
+            'source_image': source_img_tensor,
+            'target_image': target_img_tensor,
+            'source_camera': source_cam_tensor,
+            'target_camera': target_cam_tensor
         }
     
     def _load_image(self, zip_ref: zipfile.ZipFile, image_path: str) -> Image.Image:
@@ -358,8 +354,8 @@ class ObjaverseDataModule(pl.LightningDataModule):
 def visualize_sample(sample):
     """Visualize a sample from the dataset."""
     # Get source and target images
-    src_img = sample['source']['image'][0].permute(1, 2, 0).numpy()
-    tgt_img = sample['target']['image'][0].permute(1, 2, 0).numpy()
+    src_img = sample['source_image'][0].permute(1, 2, 0).numpy()
+    tgt_img = sample['target_image'][0].permute(1, 2, 0).numpy()
     
     # Display the images
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
@@ -378,9 +374,9 @@ def visualize_sample(sample):
     
     # Print camera matrices
     print("Source Camera Matrix:")
-    print(sample['source']['camera'][0])
+    print(sample['source_camera'][0])
     print("\nTarget Camera Matrix:")
-    print(sample['target']['camera'][0])
+    print(sample['target_camera'][0])
 
 
 def main():

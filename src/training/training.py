@@ -1,6 +1,8 @@
+# This needs adjusting to the new dataset and architecture
+
 from .losses import PerceptualLoss, compute_losses
 from pytorch_lightning import LightningModule
-from .utils import create_output_dirs
+from src.utils import create_output_dirs
 from pytorch_msssim import SSIM
 from PIL import Image
 import wandb
@@ -43,6 +45,7 @@ class MVDLightningModule(LightningModule):
         print(f"Total UNet parameters: {total_params:,}")
         print(f"Trainable parameters: {trainable_params:,}")
         print(f"Frozen parameters: {total_params - trainable_params:,}")
+        print(f"Training: {trainable_params / total_params * 100:.2f}% of the model")
         
         # Create output directories
         self.dirs = create_output_dirs(output_dir)
@@ -126,7 +129,6 @@ class MVDLightningModule(LightningModule):
         target_images = batch['target_image'].to(self.device)
         source_camera = {k: v.to(self.device) for k, v in batch['source_camera'].items()}
         target_camera = {k: v.to(self.device) for k, v in batch['target_camera'].items()}
-        points_3d = [points.to(self.device) for points in batch['points_3d']]
         
         # Prepare prompt
         batch_size = source_images.shape[0]
@@ -164,7 +166,6 @@ class MVDLightningModule(LightningModule):
             encoder_hidden_states=text_embeddings,
             source_camera=source_camera,
             target_camera=target_camera,
-            points_3d=points_3d
         ).sample
         
         # Denoise the image
@@ -259,7 +260,6 @@ class MVDLightningModule(LightningModule):
                 num_inference_steps=20,
                 source_camera=batch['source_camera'],
                 target_camera=batch['target_camera'],
-                points_3d=batch['points_3d'],
                 num_images_per_prompt=1,
                 output_type="np"
             ).images
