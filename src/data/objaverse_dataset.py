@@ -58,18 +58,14 @@ class ObjaverseDataset(Dataset):
         self.max_samples = max_samples
         self.rng = random.Random(seed)
         
-        # Find all zip files in the renders directory
         render_dir = self.data_root / "renders"
         self.zip_files = sorted(glob.glob(str(render_dir / "*.zip")))
         logger.info(f"Found {len(self.zip_files)} object zip files in {render_dir}")
         
-        # Split the dataset
         self._split_dataset(split_ratio)
         
-        # Prepare data structure that will hold information about view pairs
         self.view_pairs = []
         
-        # Index the dataset to build view pairs
         self._build_view_pairs()
         
         # Limit the number of samples if requested
@@ -86,11 +82,9 @@ class ObjaverseDataset(Dataset):
         all_zips = self.zip_files.copy()
         self.rng.shuffle(all_zips)
         
-        # Calculate split indices
         train_end = int(len(all_zips) * split_ratio[0])
         val_end = train_end + int(len(all_zips) * split_ratio[1])
         
-        # Assign zips based on requested split
         if self.split == "train":
             self.zip_files = all_zips[:train_end]
         elif self.split == "val":
@@ -154,8 +148,10 @@ class ObjaverseDataset(Dataset):
                                 'zip_path': zip_path,
                                 'object_uid': object_uid,
                                 'prompt': prompt,
-                                'source': {'image': src_png, 'camera': src_npy},
-                                'target': {'image': tgt_png, 'camera': tgt_npy}
+                                'source_image': src_png,
+                                'source_camera': src_npy,
+                                'target_image': tgt_png,
+                                'target_camera': tgt_npy
                             })
             
             except (zipfile.BadZipFile, KeyError, Exception) as e:
@@ -173,20 +169,20 @@ class ObjaverseDataset(Dataset):
         pair_info = self.view_pairs[idx]
         zip_path = pair_info['zip_path']
         object_uid = pair_info['object_uid']
-        
-        # Get the source and target info
-        source_info = pair_info['source']
-        target_info = pair_info['target']
+        source_image = pair_info['source_image']
+        source_camera = pair_info['source_camera']
+        target_image = pair_info['target_image']
+        target_camera = pair_info['target_camera']
         
         # Load the data from the zip file
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             # Load source data
-            source_img = self._load_image(zip_ref, source_info['image'])
-            source_cam = self._load_camera(zip_ref, source_info['camera'])
+            source_img = self._load_image(zip_ref, source_image)
+            source_cam = self._load_camera(zip_ref, source_camera)
             
             # Load target data
-            target_img = self._load_image(zip_ref, target_info['image'])
-            target_cam = self._load_camera(zip_ref, target_info['camera'])
+            target_img = self._load_image(zip_ref, target_image)
+            target_cam = self._load_camera(zip_ref, target_camera)
             
         # Apply transformations if specified
         if self.transform:

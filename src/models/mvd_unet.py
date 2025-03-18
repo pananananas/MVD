@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import torch.nn as nn
 import logging
 import torch
+import gc
 
 logger = logging.getLogger(__name__)
 
@@ -12,52 +13,56 @@ class MultiViewUNet(nn.Module):
     def __init__(
         self, 
         pretrained_model_name_or_path,
-        dtype: torch.dtype = torch.float16,
+        dtype: torch.dtype = torch.float32,
         use_memory_efficient_attention: bool = True,
         enable_gradient_checkpointing: bool = True,
     ):
         super().__init__()
-        # Load base UNet
+        
+        # Force memory efficient attention to reduce memory usage
+        use_memory_efficient_attention = True
+        
+        # Load UNet with memory optimization
         self.base_unet = UNet2DConditionModel.from_pretrained(
             pretrained_model_name_or_path,
             subfolder="unet",
             use_memory_efficient_attention=use_memory_efficient_attention,
-            torch_dtype=dtype
+            torch_dtype=dtype,
+            low_cpu_mem_usage=True
         )
         
-        # Expose config from base_unet
         self.config = self.base_unet.config
         
         if enable_gradient_checkpointing:
             self.base_unet.enable_gradient_checkpointing()
         
-        # Add camera encoder
-        self.camera_encoder = CameraEncoder(output_dim=1024)  # Fixed size for positional encodings
+        # Get device from base UNet for consistency
+        self.device = self.base_unet.device
+        self.dtype = self.base_unet.dtype
         
-        # Get channel dimensions from UNet config
-        # In Stable Diffusion, the channel dimensions double at each downsampling step
-        # Starting from block_out_channels[0]
+        # Create camera encoder
+        self.camera_encoder = CameraEncoder(output_dim=1024).to(device=self.device, dtype=self.dtype)
+        
+        # In SD, the channel dimensions double at each downsampling step
         down_channels = self.config.block_out_channels
-        up_channels = list(reversed(down_channels))  # Include all channels for up blocks
-        mid_channels = down_channels[-1]  # Mid block has same channels as deepest down block
+        up_channels   = list(reversed(down_channels))
+        mid_channels  = down_channels[-1]
         
-        # Count actual number of blocks
         num_down_blocks = len(self.base_unet.down_blocks)
-        num_up_blocks = len(self.base_unet.up_blocks)
+        num_up_blocks   = len(self.base_unet.up_blocks)
         
-        # Create modulation layers for each resolution
+        # Create modulation layers for each UNET block
         self.down_modulators = nn.ModuleList([
             nn.Linear(1024, down_channels[min(i, len(down_channels)-1)] * 2) 
             for i in range(num_down_blocks)
-        ])
-        self.up_modulators = nn.ModuleList([
-            nn.Linear(1024, up_channels[i] * 2)  # Use exact index since we have all channels
-            for i in range(num_up_blocks)
-        ])
-        self.mid_modulator = nn.Linear(1024, mid_channels * 2)
+        ]).to(device=self.device, dtype=self.dtype)
         
-        self.dtype = self.base_unet.dtype
-        self.device = self.base_unet.device
+        self.up_modulators = nn.ModuleList([
+            nn.Linear(1024, up_channels[i] * 2)
+            for i in range(num_up_blocks)
+        ]).to(device=self.device, dtype=self.dtype)
+        
+        self.mid_modulator = nn.Linear(1024, mid_channels * 2).to(device=self.device, dtype=self.dtype)
         
         self._register_hooks()
     
@@ -109,10 +114,19 @@ class MultiViewUNet(nn.Module):
             block.register_forward_hook(get_modulation_hook(self.up_modulators[idx]))
     
     def to(self, *args, **kwargs):
-        self.device = args[0] if args else kwargs.get('device', self.device)
+        device = args[0] if args else kwargs.get('device', self.device)
+        dtype = kwargs.get('dtype', self.dtype)
+        
+        self.device = device
         if 'dtype' in kwargs:
-            self.dtype = kwargs['dtype']
-        self.camera_encoder.to(*args, **kwargs)
+            self.dtype = dtype
+            
+        # Ensure all components are moved to the correct device
+        self.camera_encoder = self.camera_encoder.to(device=device, dtype=dtype)
+        self.down_modulators = self.down_modulators.to(device=device, dtype=dtype)
+        self.up_modulators = self.up_modulators.to(device=device, dtype=dtype)
+        self.mid_modulator = self.mid_modulator.to(device=device, dtype=dtype)
+        
         return super().to(*args, **kwargs)
     
     def forward(
@@ -127,23 +141,27 @@ class MultiViewUNet(nn.Module):
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         added_cond_kwargs: Optional[Dict[str, torch.Tensor]] = None,
     ):
-        # Move inputs to device and cast to dtype
         sample = sample.to(device=self.device, dtype=self.dtype)
         timestep = timestep.to(device=self.device)
         encoder_hidden_states = encoder_hidden_states.to(device=self.device)
         
+        target_camera = target_camera.to(device=self.device)
         
-        # Move camera data to device
-        # source_camera = {k: v.to(self.device) for k, v in source_camera.items()}
-        target_camera = {k: v.to(self.device) for k, v in target_camera.items()}
+        target_camera_dict = {
+            'R': target_camera[:, :3, :3].to(device=self.device),  # [B, 3, 3]
+            'T': target_camera[:, :3, 3].to(device=self.device)    # [B, 3]
+        }
         
-        # Encode camera parameters
-        # source_embedding = self.camera_encoder(source_camera)  # [B, 1024]
-        target_embedding = self.camera_encoder(target_camera)  # [B, 1024]
+        target_embedding = self.camera_encoder(target_camera_dict)  # [B, 1024]
         
-        # Store the camera embedding for use in the hooks
-        # We use target embedding as we want to condition on the target view
         self.current_camera_embedding = target_embedding
+        
+        original_shape = sample.shape
+        # resizing applied on macos to save ram
+        max_size = 64
+        
+        if sample.shape[2] > max_size or sample.shape[3] > max_size:
+            sample = F.interpolate(sample, size=(max_size, max_size), mode='bilinear')
         
         # Forward through base UNet
         output = self.base_unet(
@@ -156,18 +174,30 @@ class MultiViewUNet(nn.Module):
             return_dict=return_dict
         )
         
-        # Clean up the stored embedding
-        del self.current_camera_embedding
+        # If we resized the input, resize the output back to original shape
+        if sample.shape != original_shape:
+            if isinstance(output, dict) and 'sample' in output:
+                output['sample'] = F.interpolate(output['sample'], 
+                                            size=(original_shape[2], original_shape[3]), 
+                                            mode='bilinear')
+            else:
+                output = F.interpolate(output, 
+                                    size=(original_shape[2], original_shape[3]), 
+                                    mode='bilinear')
         
+        del self.current_camera_embedding
         return output
+
 
 def create_mvd_pipeline(
     pretrained_model_name_or_path: str = "runwayml/stable-diffusion-v1-5",
-    dtype: torch.dtype = torch.float16,
+    dtype: torch.dtype = torch.float16,  # Using float16 for memory efficiency
     use_memory_efficient_attention: bool = True,
     enable_gradient_checkpointing: bool = True,
     cache_dir=None,
 ):
+    device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+
     pipeline = StableDiffusionPipeline.from_pretrained(
         pretrained_model_name_or_path,
         torch_dtype=dtype,
@@ -177,18 +207,13 @@ def create_mvd_pipeline(
     pipeline.safety_checker = None
     pipeline.feature_extractor = None
     
-    # print("\n\n\n\nBase pipeline.unet")
-    # print(pipeline.unet)
-
-    # Replace UNet with our version
     mv_unet = MultiViewUNet(
         pretrained_model_name_or_path,
         dtype=dtype,
         use_memory_efficient_attention=use_memory_efficient_attention,
         enable_gradient_checkpointing=enable_gradient_checkpointing,
     )
+    mv_unet = mv_unet.to(device=device, dtype=dtype)
     pipeline.unet = mv_unet
-    # print("\n\n\n\nUpdated pipeline.unet")
-    # print(pipeline.unet)
     
     return pipeline

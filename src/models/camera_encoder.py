@@ -34,6 +34,19 @@ class CameraEncoder(nn.Module):
             nn.LayerNorm(output_dim)
         )
     
+    def to(self, *args, **kwargs):
+        """Override to() to ensure all submodules are moved to the correct device"""
+        device = args[0] if args else kwargs.get('device', None)
+        dtype = kwargs.get('dtype', None)
+        
+        if device is not None:
+            # Explicitly move all Sequential modules to the device
+            self.rotation_encoder = self.rotation_encoder.to(device=device, dtype=dtype)
+            self.translation_encoder = self.translation_encoder.to(device=device, dtype=dtype)
+            self.final_projection = self.final_projection.to(device=device, dtype=dtype)
+        
+        return super().to(*args, **kwargs)
+    
     def positional_encoding(self, x: torch.Tensor) -> torch.Tensor:
         """
         Sinusoidal positional encoding for translation vectors
@@ -42,8 +55,9 @@ class CameraEncoder(nn.Module):
         Returns:
             encoding of shape [B, output_dim]
         """
+        device = x.device  # Get device from input tensor
         batch_size = x.shape[0]
-        freqs = torch.exp(torch.linspace(0., np.log(self.max_freq), self.pos_enc_dim, device=x.device))
+        freqs = torch.exp(torch.linspace(0., np.log(self.max_freq), self.pos_enc_dim, device=device))
         
         # Expand dimensions for broadcasting
         x_expanded = x.unsqueeze(-1)  # [B, 3, 1]
@@ -57,11 +71,9 @@ class CameraEncoder(nn.Module):
         encoding = torch.cat([sin_enc, cos_enc], dim=-1)  # [B, 3, 2*pos_enc_dim]
         encoding = encoding.reshape(batch_size, -1)  # [B, 6*pos_enc_dim]
         
-        # Project to desired output dimension
-        encoding = F.linear(
-            encoding,
-            torch.randn(self.output_dim, encoding.shape[-1], device=x.device) / np.sqrt(encoding.shape[-1])
-        )
+        # Project to desired output dimension - ensure all tensors are on the same device
+        weight = torch.randn(self.output_dim, encoding.shape[-1], device=device) / np.sqrt(encoding.shape[-1])
+        encoding = F.linear(encoding, weight)
         
         return encoding
     
@@ -73,8 +85,22 @@ class CameraEncoder(nn.Module):
         Returns:
             camera_embedding: [B, output_dim]
         """
-        R = camera_data['R']
-        T = camera_data['T']
+        # Extract rotation and translation from camera data and ensure they're on the right device
+        R = camera_data['R']  # [B, 3, 3]
+        T = camera_data['T']  # [B, 3]
+        
+        # Get device for consistency
+        device = R.device
+        
+        # Explicitly check and move modules to the device if needed
+        if next(self.rotation_encoder.parameters()).device != device:
+            self.rotation_encoder = self.rotation_encoder.to(device)
+            self.translation_encoder = self.translation_encoder.to(device)
+            self.final_projection = self.final_projection.to(device)
+        
+        # Ensure inputs are on the correct device
+        R = R.to(device)
+        T = T.to(device)
         
         # Process rotation matrix
         R_flat = R.reshape(R.shape[0], -1)  # [B, 9]

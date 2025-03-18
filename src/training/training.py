@@ -5,8 +5,11 @@ from pytorch_lightning import LightningModule
 from src.utils import create_output_dirs
 from pytorch_msssim import SSIM
 from PIL import Image
+import logging
 import wandb
 import torch
+
+logger = logging.getLogger(__name__)
 
 class MVDLightningModule(LightningModule):
     def __init__(
@@ -39,102 +42,41 @@ class MVDLightningModule(LightningModule):
         self.vae.eval()
         self.text_encoder.eval()
         
-        # Print parameter counts
         total_params = sum(p.numel() for p in self.unet.parameters())
         trainable_params = sum(p.numel() for p in self.unet.parameters() if p.requires_grad)
-        print(f"Total UNet parameters: {total_params:,}")
-        print(f"Trainable parameters: {trainable_params:,}")
-        print(f"Frozen parameters: {total_params - trainable_params:,}")
-        print(f"Training: {trainable_params / total_params * 100:.2f}% of the model")
+        percentage = trainable_params / total_params * 100
         
-        # Create output directories
+        logger.info(f"Total UNet parameters: {total_params:,}")
+        logger.info(f"Frozen parameters: {total_params - trainable_params:,}")
+        logger.info(f"Trainable parameters: {trainable_params:,}")
+        logger.info(f"Training: {percentage:.2f}% of the model")
+        
         self.dirs = create_output_dirs(output_dir)
-        
-        # Initialize SSIM loss
         self.ssim = SSIM(data_range=2.0, size_average=True)  # range [-1,1]
-        
-        # Perceptual loss initialized in setup
         self.perceptual_loss = None
-        
-        # For logging
         self.training_step_outputs = []
         self.validation_step_outputs = []
-    
-    def setup(self, stage=None):
-        # Initialize perceptual loss
-        if self.perceptual_loss is None:
-            self.perceptual_loss = PerceptualLoss(device=self.device)
-        self.pipeline.to(self.device)
-        torch.set_float32_matmul_precision('high')
-    
-    def on_train_epoch_start(self):
-        self.training_step_outputs = []
-    
-    def on_validation_epoch_start(self):
-        self.validation_step_outputs = []
-    
-    def on_train_epoch_end(self):
-        # Calculate epoch-level metrics
-        epoch_losses = {
-            'total_loss': 0.0,
-            'noise_loss': 0.0,
-            'recon_loss': 0.0,
-            'perceptual_loss': 0.0,
-            'ssim_loss': 0.0,
-            'geometric_loss': 0.0,
-            'ssim_value': 0.0,
-        }
-        
-        for output in self.training_step_outputs:
-            for key in epoch_losses:
-                epoch_losses[key] += output[key]
-        
-        # Average the losses
-        num_steps = len(self.training_step_outputs)
-        if num_steps > 0:
-            for key in epoch_losses:
-                epoch_losses[key] /= num_steps
-                self.log(f"train/{key}_epoch", epoch_losses[key], on_epoch=True, sync_dist=True)
-        
-        self.training_step_outputs = []
-    
-    def on_validation_epoch_end(self):
-        # Calculate epoch-level metrics
-        epoch_losses = {
-            'total_loss': 0.0,
-            'noise_loss': 0.0,
-            'recon_loss': 0.0,
-            'perceptual_loss': 0.0,
-            'ssim_loss': 0.0,
-            'geometric_loss': 0.0,
-            'ssim_value': 0.0,
-        }
-        
-        for output in self.validation_step_outputs:
-            for key in epoch_losses:
-                epoch_losses[key] += output[key]
-        
-        # Average the losses
-        num_steps = len(self.validation_step_outputs)
-        if num_steps > 0:
-            for key in epoch_losses:
-                epoch_losses[key] /= num_steps
-                self.log(f"val/{key}", epoch_losses[key], on_epoch=True, sync_dist=True)
-        
-        self.validation_step_outputs = []
-    
+
+
     def forward(self, batch):
-        # Move batch to device
         source_images = batch['source_image'].to(self.device)
         target_images = batch['target_image'].to(self.device)
-        source_camera = {k: v.to(self.device) for k, v in batch['source_camera'].items()}
-        target_camera = {k: v.to(self.device) for k, v in batch['target_camera'].items()}
         
-        # Prepare prompt
-        batch_size = source_images.shape[0]
-        prompts = [self.config['prompt']] * batch_size
+        # The prompts are a list of strings, no need to move to device
+        prompts = batch['prompt']
         
-        # Tokenize with proper batch size
+        # Check if camera parameters exist in the batch and move to device if they do
+        source_camera = batch.get('source_camera', None)
+        target_camera = batch.get('target_camera', None)
+        
+        if source_camera is not None:
+            source_camera = source_camera.to(self.device)
+        if target_camera is not None:
+            target_camera = target_camera.to(self.device)
+        
+        # Debug logs to help troubleshoot
+        print(f"In forward - source_camera: {type(source_camera)}, target_camera: {type(target_camera)}")
+            
         text_input = self.tokenizer(
             prompts,
             padding="max_length",
@@ -143,10 +85,8 @@ class MVDLightningModule(LightningModule):
             return_tensors="pt"
         ).to(self.device)
         
-        # Encode prompt
         text_embeddings = self.text_encoder(text_input.input_ids)[0]
         
-        # Forward pass
         noise = torch.randn_like(source_images)
         timesteps = torch.randint(
             0,
@@ -156,10 +96,9 @@ class MVDLightningModule(LightningModule):
         )
         noisy_images = self.scheduler.add_noise(source_images, noise, timesteps)
         
-        # Add extra channel for noise prediction (alpha channel)
+        # Add extra channel for noise prediction (alpha channel which can be used for inpainting)
         noisy_images = torch.cat([noisy_images, torch.zeros_like(noisy_images[:, :1])], dim=1)
         
-        # Predict noise
         noise_pred = self.unet(
             sample=noisy_images,
             timestep=timesteps,
@@ -168,7 +107,6 @@ class MVDLightningModule(LightningModule):
             target_camera=target_camera,
         ).sample
         
-        # Denoise the image
         alpha_t = self.scheduler.alphas_cumprod[timesteps]
         alpha_t = alpha_t.view(-1, 1, 1, 1)
         denoised_images = (noisy_images - (1 - alpha_t).sqrt() * noise_pred) / alpha_t.sqrt()
@@ -255,11 +193,20 @@ class MVDLightningModule(LightningModule):
         with torch.no_grad():
             # Generate images
             batch_size = len(batch['source_image'])
+            
+            # Check if camera parameters exist in the batch
+            source_camera = batch.get('source_camera', None)
+            target_camera = batch.get('target_camera', None)
+            
+            # Debug logs
+            print(f"In _save_generated_samples - source_camera: {type(source_camera)}, target_camera: {type(target_camera)}")
+            
+            # Call pipeline with safe parameters
             images = self.pipeline(
-                prompt=[self.config['prompt']] * batch_size,
+                prompt=batch['prompt'],
                 num_inference_steps=20,
-                source_camera=batch['source_camera'],
-                target_camera=batch['target_camera'],
+                source_camera=source_camera,
+                target_camera=target_camera,
                 num_images_per_prompt=1,
                 output_type="np"
             ).images

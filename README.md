@@ -1,8 +1,15 @@
+# Global tasks:
+- [ ] add prompts to the dataset
+
+
+
 # TODO:
 Data:
-- [x] download benchmark dataset 
-- [x] nowy data loader do objaverse-xl
 - [ ] add a prompt.txt for every file in the dataset
+- [ ] filter out objects without textures
+
+Training:
+- [ ] change the training loop to use the new dataset
 
 Model:
 - [ ] Camera encoding
@@ -14,9 +21,16 @@ Attention (decoupled)
 - [ ] Multi-view attention (duplicated from spatial)
 
 
+# Ideas:
+- LLM as a judge do oceny jakości generowanych obrazów
 
 
 
+
+# Observations:
+- 
+- 
+- 
 
 
 # Plan działania

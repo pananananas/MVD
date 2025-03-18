@@ -19,7 +19,7 @@ image_size:
 - 512
 - 512
 max_views_per_object: 6
-max_samples: 1  # Set to null for full dataset
+max_samples: null  # Set to null for full dataset
 
 # Loss parameters
 perceptual_weight: 0.1

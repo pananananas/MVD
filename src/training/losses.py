@@ -50,16 +50,31 @@ def compute_losses(noise_pred, noise, denoised_images, target_images, source_ima
         ssim_loss_fn: Instance of SSIM
         config: Training configuration with loss weights
     """
+    # Debug logs to check loss functions
+    print(f"perceptual_loss_fn: {perceptual_loss_fn}")
+    print(f"ssim_loss_fn: {ssim_loss_fn}")
+    print(f"Type of perceptual_loss_fn: {type(perceptual_loss_fn)}")
+    print(f"Type of ssim_loss_fn: {type(ssim_loss_fn)}")
+    
     # Basic losses
     noise_loss = F.mse_loss(noise_pred[:, :3], noise)
     recon_loss = F.l1_loss(denoised_images[:, :3], target_images)
     
     # Perceptual loss
-    perceptual_loss = perceptual_loss_fn(denoised_images[:, :3], target_images)
+    if perceptual_loss_fn is None:
+        print("WARNING: perceptual_loss_fn is None! Using a default loss instead.")
+        perceptual_loss = recon_loss  # Use reconstruction loss as fallback
+    else:
+        perceptual_loss = perceptual_loss_fn(denoised_images[:, :3], target_images)
     
     # Structural similarity loss
-    ssim_value = ssim_loss_fn(denoised_images[:, :3], target_images)
-    ssim_loss = 1 - ssim_value
+    if ssim_loss_fn is None:
+        print("WARNING: ssim_loss_fn is None! Using a default loss instead.")
+        ssim_value = 0.0
+        ssim_loss = 1.0
+    else:
+        ssim_value = ssim_loss_fn(denoised_images[:, :3], target_images)
+        ssim_loss = 1 - ssim_value
     
     # Geometric consistency loss
     geometric_loss = compute_geometric_consistency(denoised_images[:, :3], source_images, target_images)
@@ -77,8 +92,8 @@ def compute_losses(noise_pred, noise, denoised_images, target_images, source_ima
         'total_loss': total_loss,
         'noise_loss': noise_loss.item(),
         'recon_loss': recon_loss.item(),
-        'perceptual_loss': perceptual_loss.item(),
-        'ssim_loss': ssim_loss.item(),
+        'perceptual_loss': perceptual_loss.item() if not isinstance(perceptual_loss, type(None)) else 0.0,
+        'ssim_loss': ssim_loss.item() if not isinstance(ssim_loss, float) else ssim_loss,
         'geometric_loss': geometric_loss.item(),
-        'ssim_value': ssim_value.item()
+        'ssim_value': ssim_value.item() if not isinstance(ssim_value, float) else ssim_value
     } 
