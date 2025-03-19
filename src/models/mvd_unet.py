@@ -1,11 +1,11 @@
-from diffusers import StableDiffusionPipeline, UNet2DConditionModel
+from diffusers import UNet2DConditionModel
 from .camera_encoder import CameraEncoder
 from typing import Optional, Dict, Any
+from .pipeline import MVDPipeline
 import torch.nn.functional as F
 import torch.nn as nn
 import logging
 import torch
-import gc
 
 logger = logging.getLogger(__name__)
 
@@ -163,31 +163,31 @@ class MultiViewUNet(nn.Module):
         if sample.shape[2] > max_size or sample.shape[3] > max_size:
             sample = F.interpolate(sample, size=(max_size, max_size), mode='bilinear')
         
-        # Forward through base UNet
-        output = self.base_unet(
-            sample=sample,
-            timestep=timestep,
-            encoder_hidden_states=encoder_hidden_states,
-            timestep_cond=timestep_cond,
-            cross_attention_kwargs=cross_attention_kwargs,
-            added_cond_kwargs=added_cond_kwargs,
-            return_dict=return_dict
-        )
-        
-        # If we resized the input, resize the output back to original shape
-        if sample.shape != original_shape:
-            if isinstance(output, dict) and 'sample' in output:
-                output['sample'] = F.interpolate(output['sample'], 
-                                            size=(original_shape[2], original_shape[3]), 
-                                            mode='bilinear')
-            else:
-                output = F.interpolate(output, 
-                                    size=(original_shape[2], original_shape[3]), 
-                                    mode='bilinear')
-        
-        del self.current_camera_embedding
-        return output
-
+            # Forward through base UNet
+            output = self.base_unet(
+                sample=sample,
+                timestep=timestep,
+                encoder_hidden_states=encoder_hidden_states,
+                timestep_cond=timestep_cond,
+                cross_attention_kwargs=cross_attention_kwargs,
+                added_cond_kwargs=added_cond_kwargs,
+                return_dict=return_dict
+            )
+            
+            # If we resized the input, resize the output back to original shape
+            if sample.shape != original_shape:
+                if isinstance(output, dict) and 'sample' in output:
+                    output['sample'] = F.interpolate(output['sample'], 
+                                                size=(original_shape[2], original_shape[3]), 
+                                                mode='bilinear')
+                else:
+                    output = F.interpolate(output, 
+                                        size=(original_shape[2], original_shape[3]), 
+                                        mode='bilinear')
+            
+            del self.current_camera_embedding
+            return output
+            
 
 def create_mvd_pipeline(
     pretrained_model_name_or_path: str = "runwayml/stable-diffusion-v1-5",
@@ -198,7 +198,7 @@ def create_mvd_pipeline(
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
 
-    pipeline = StableDiffusionPipeline.from_pretrained(
+    pipeline = MVDPipeline.from_pretrained(
         pretrained_model_name_or_path,
         torch_dtype=dtype,
         cache_dir=cache_dir,

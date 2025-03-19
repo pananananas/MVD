@@ -1,5 +1,3 @@
-# This needs adjusting to the new dataset and architecture
-
 from .losses import PerceptualLoss, compute_losses
 from pytorch_lightning import LightningModule
 from src.utils import create_output_dirs
@@ -53,7 +51,7 @@ class MVDLightningModule(LightningModule):
         
         self.dirs = create_output_dirs(output_dir)
         self.ssim = SSIM(data_range=2.0, size_average=True)  # range [-1,1]
-        self.perceptual_loss = None
+        self.perceptual_loss = None #PerceptualLoss(device=self.device)
         self.training_step_outputs = []
         self.validation_step_outputs = []
 
