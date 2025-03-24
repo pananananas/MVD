@@ -31,8 +31,7 @@ class PerceptualLoss:
 def compute_geometric_consistency(generated, source, target):
     """
     Compute geometric consistency loss between views
-    For now, a simple L1 loss between generated and target images
-    TODO: Implement more sophisticated geometric consistency check
+    For latent representations, we use a simple L1 loss
     """
     return F.l1_loss(generated, target)
 
@@ -41,11 +40,11 @@ def compute_losses(noise_pred, noise, denoised_images, target_images, source_ima
     Compute all loss components for MVD training
     
     Args:
-        noise_pred: Predicted noise
-        noise: Ground truth noise
-        denoised_images: Generated images after denoising
-        target_images: Ground truth target view images
-        source_images: Source view images
+        noise_pred: Predicted noise (4-channel latent)
+        noise: Ground truth noise (4-channel latent)
+        denoised_images: Generated images after denoising (4-channel latent)
+        target_images: Ground truth target view images (4-channel latent)
+        source_images: Source view images (4-channel latent)
         perceptual_loss_fn: Instance of PerceptualLoss
         ssim_loss_fn: Instance of SSIM
         config: Training configuration with loss weights
@@ -56,33 +55,38 @@ def compute_losses(noise_pred, noise, denoised_images, target_images, source_ima
     print(f"Type of perceptual_loss_fn: {type(perceptual_loss_fn)}")
     print(f"Type of ssim_loss_fn: {type(ssim_loss_fn)}")
     
-    # Basic losses
-    noise_loss = F.mse_loss(noise_pred[:, :3], noise)
-    recon_loss = F.l1_loss(denoised_images[:, :3], target_images)
+    noise_loss = F.mse_loss(noise_pred, noise)
+    recon_loss = F.l1_loss(denoised_images, target_images)
     
-    # Perceptual loss
+    # SSIM and perceptual losses can't work on 4-channel latents
+    # If needed, decode to pixel space first
+    # For now, we'll just use simpler losses
+    
+    # Perceptual loss - skip for latent space
     if perceptual_loss_fn is None:
         print("WARNING: perceptual_loss_fn is None! Using a default loss instead.")
         perceptual_loss = recon_loss  # Use reconstruction loss as fallback
     else:
-        perceptual_loss = perceptual_loss_fn(denoised_images[:, :3], target_images)
+        print("WARNING: Perceptual loss not applicable in latent space, using recon_loss instead")
+        perceptual_loss = recon_loss
     
-    # Structural similarity loss
+    # Structural similarity loss - skip for latent space
     if ssim_loss_fn is None:
         print("WARNING: ssim_loss_fn is None! Using a default loss instead.")
         ssim_value = 0.0
         ssim_loss = 1.0
     else:
-        ssim_value = ssim_loss_fn(denoised_images[:, :3], target_images)
-        ssim_loss = 1 - ssim_value
+        print("WARNING: SSIM not applicable in latent space, using fixed value")
+        ssim_value = 0.0
+        ssim_loss = 1.0
     
-    # Geometric consistency loss
-    geometric_loss = compute_geometric_consistency(denoised_images[:, :3], source_images, target_images)
+    # Geometric consistency loss - works on latent space
+    geometric_loss = compute_geometric_consistency(denoised_images, source_images, target_images)
     
     # Weight the loss components using config values
     total_loss = (
-        # 1.0 * noise_loss +
-        # 1.0 * recon_loss +
+        1.0 * noise_loss +  # Make noise loss significant for latent training
+        0.5 * recon_loss +  # Reconstruction in latent space
         config['perceptual_weight'] * perceptual_loss +
         config['ssim_weight']       * ssim_loss +
         config['geometric_weight']  * geometric_loss

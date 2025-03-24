@@ -10,6 +10,7 @@ Data:
 
 Training:
 - [ ] change the training loop to use the new dataset
+- [ ] make the losses work on images instead of latents: SSIM, PSNR, perceptual, geometric
 
 Model:
 - [ ] Camera encoding

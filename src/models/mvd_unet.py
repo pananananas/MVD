@@ -1,13 +1,15 @@
+from typing import Optional, Dict, Any, NamedTuple
 from diffusers import UNet2DConditionModel
 from .camera_encoder import CameraEncoder
-from typing import Optional, Dict, Any
 from .pipeline import MVDPipeline
-import torch.nn.functional as F
 import torch.nn as nn
 import logging
 import torch
 
 logger = logging.getLogger(__name__)
+
+class UNetOutput(NamedTuple):
+    sample: torch.FloatTensor
 
 class MultiViewUNet(nn.Module):
     def __init__(
@@ -19,10 +21,8 @@ class MultiViewUNet(nn.Module):
     ):
         super().__init__()
         
-        # Force memory efficient attention to reduce memory usage
         use_memory_efficient_attention = True
         
-        # Load UNet with memory optimization
         self.base_unet = UNet2DConditionModel.from_pretrained(
             pretrained_model_name_or_path,
             subfolder="unet",
@@ -31,19 +31,15 @@ class MultiViewUNet(nn.Module):
             low_cpu_mem_usage=True
         )
         
-        self.config = self.base_unet.config
-        
+        self.config = self.base_unet.config        
+        self.device = self.base_unet.device
+        self.dtype  = self.base_unet.dtype
+
         if enable_gradient_checkpointing:
             self.base_unet.enable_gradient_checkpointing()
         
-        # Get device from base UNet for consistency
-        self.device = self.base_unet.device
-        self.dtype = self.base_unet.dtype
-        
-        # Create camera encoder
         self.camera_encoder = CameraEncoder(output_dim=1024).to(device=self.device, dtype=self.dtype)
         
-        # In SD, the channel dimensions double at each downsampling step
         down_channels = self.config.block_out_channels
         up_channels   = list(reversed(down_channels))
         mid_channels  = down_channels[-1]
@@ -51,7 +47,6 @@ class MultiViewUNet(nn.Module):
         num_down_blocks = len(self.base_unet.down_blocks)
         num_up_blocks   = len(self.base_unet.up_blocks)
         
-        # Create modulation layers for each UNET block
         self.down_modulators = nn.ModuleList([
             nn.Linear(1024, down_channels[min(i, len(down_channels)-1)] * 2) 
             for i in range(num_down_blocks)
@@ -64,55 +59,26 @@ class MultiViewUNet(nn.Module):
         
         self.mid_modulator = nn.Linear(1024, mid_channels * 2).to(device=self.device, dtype=self.dtype)
         
-        self._register_hooks()
-    
-    def _register_hooks(self):
-        """Register forward hooks on UNet blocks to apply modulation"""
-        def get_modulation_hook(modulator):
-            def hook(module, input, output):
-                # Get the current camera embedding from the stored state
-                if not hasattr(self, 'current_camera_embedding'):
-                    return output
-                
-                # Handle tuple output case (some UNet blocks return multiple tensors)
-                if isinstance(output, tuple):
-                    hidden_states = output[0]
-                else:
-                    hidden_states = output
-                
-                # Generate scale and shift
-                modulation = modulator(self.current_camera_embedding)  # [B, C*2]
-                scale, shift = modulation.chunk(2, dim=-1)  # Each [B, C]
-                
-                # Reshape for broadcasting
-                scale = scale.view(scale.shape[0], scale.shape[1], 1, 1)  # [B, C, 1, 1]
-                shift = shift.view(shift.shape[0], shift.shape[1], 1, 1)  # [B, C, 1, 1]
-                
-                # Ensure scale and shift have the correct number of channels
-                if scale.shape[1] != hidden_states.shape[1]:
-                    raise ValueError(f"Channel dimension mismatch: scale has {scale.shape[1]} channels but hidden states has {hidden_states.shape[1]} channels")
-                
-                # Apply modulation
-                modulated_states = hidden_states * scale + shift
-                
-                # Return in the same format as input
-                if isinstance(output, tuple):
-                    return (modulated_states,) + output[1:]
-                return modulated_states
-            
-            return hook
+        self.output_modulator = nn.Linear(1024, 4 * 2).to(device=self.device, dtype=self.dtype)
+
+
+    def apply_modulation(self, hidden_states, modulator, camera_embedding):
+        """Apply scale and shift modulation to hidden states"""
+        # Generate scale and shift
+        modulation = modulator(camera_embedding)  # [B, C*2]
+        scale, shift = modulation.chunk(2, dim=-1)  # Each [B, C]
         
-        # Register hooks for down blocks
-        for idx, block in enumerate(self.base_unet.down_blocks):
-            block.register_forward_hook(get_modulation_hook(self.down_modulators[idx]))
+        # Reshape for broadcasting
+        scale = scale.view(scale.shape[0], scale.shape[1], 1, 1)  # [B, C, 1, 1]
+        shift = shift.view(shift.shape[0], shift.shape[1], 1, 1)  # [B, C, 1, 1]
         
-        # Register hook for mid block
-        self.base_unet.mid_block.register_forward_hook(get_modulation_hook(self.mid_modulator))
+        # Ensure scale and shift have the correct number of channels
+        if scale.shape[1] != hidden_states.shape[1]:
+            raise ValueError(f"Channel dimension mismatch: scale has {scale.shape[1]} channels but hidden states has {hidden_states.shape[1]} channels")
         
-        # Register hooks for up blocks
-        for idx, block in enumerate(self.base_unet.up_blocks):
-            block.register_forward_hook(get_modulation_hook(self.up_modulators[idx]))
-    
+        return hidden_states * scale + shift
+
+
     def to(self, *args, **kwargs):
         device = args[0] if args else kwargs.get('device', self.device)
         dtype = kwargs.get('dtype', self.dtype)
@@ -121,14 +87,15 @@ class MultiViewUNet(nn.Module):
         if 'dtype' in kwargs:
             self.dtype = dtype
             
-        # Ensure all components are moved to the correct device
-        self.camera_encoder = self.camera_encoder.to(device=device, dtype=dtype)
-        self.down_modulators = self.down_modulators.to(device=device, dtype=dtype)
-        self.up_modulators = self.up_modulators.to(device=device, dtype=dtype)
-        self.mid_modulator = self.mid_modulator.to(device=device, dtype=dtype)
+        self.camera_encoder   = self.camera_encoder.to(device=device, dtype=dtype)
+        self.down_modulators  = self.down_modulators.to(device=device, dtype=dtype)
+        self.up_modulators    = self.up_modulators.to(device=device, dtype=dtype)
+        self.mid_modulator    = self.mid_modulator.to(device=device, dtype=dtype)
+        self.output_modulator = self.output_modulator.to(device=device, dtype=dtype)
         
         return super().to(*args, **kwargs)
-    
+
+
     def forward(
         self,
         sample: torch.FloatTensor,
@@ -141,57 +108,83 @@ class MultiViewUNet(nn.Module):
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         added_cond_kwargs: Optional[Dict[str, torch.Tensor]] = None,
     ):
+
         sample = sample.to(device=self.device, dtype=self.dtype)
         timestep = timestep.to(device=self.device)
         encoder_hidden_states = encoder_hidden_states.to(device=self.device)
         
-        target_camera = target_camera.to(device=self.device)
+        # Handle batch size mismatch between sample and encoder_hidden_states
+        if sample.shape[0] > encoder_hidden_states.shape[0]:
+            repeat_factor = sample.shape[0] // encoder_hidden_states.shape[0]
+            encoder_hidden_states = encoder_hidden_states.repeat(repeat_factor, 1, 1)
         
-        target_camera_dict = {
-            'R': target_camera[:, :3, :3].to(device=self.device),  # [B, 3, 3]
-            'T': target_camera[:, :3, 3].to(device=self.device)    # [B, 3]
-        }
+        # Process camera information and generate camera embedding
+        camera_embedding = self._process_camera(target_camera, sample.shape[0])
         
-        target_embedding = self.camera_encoder(target_camera_dict)  # [B, 1024]
+        # Run the base UNet
+        output = self.base_unet(
+            sample=sample,
+            timestep=timestep,
+            encoder_hidden_states=encoder_hidden_states,
+            return_dict=True,
+            timestep_cond=timestep_cond,
+            cross_attention_kwargs=cross_attention_kwargs,
+            added_cond_kwargs=added_cond_kwargs,
+        )
         
-        self.current_camera_embedding = target_embedding
+        # Get output from base UNet
+        hidden_states = output.sample
         
-        original_shape = sample.shape
-        # resizing applied on macos to save ram
-        max_size = 64
+        # Apply camera modulation for output channels (should be 4 for latent space)
+        if hidden_states.shape[1] == 4:
+            hidden_states = self.apply_modulation(hidden_states, self.output_modulator, camera_embedding)
         
-        if sample.shape[2] > max_size or sample.shape[3] > max_size:
-            sample = F.interpolate(sample, size=(max_size, max_size), mode='bilinear')
-        
-            # Forward through base UNet
-            output = self.base_unet(
-                sample=sample,
-                timestep=timestep,
-                encoder_hidden_states=encoder_hidden_states,
-                timestep_cond=timestep_cond,
-                cross_attention_kwargs=cross_attention_kwargs,
-                added_cond_kwargs=added_cond_kwargs,
-                return_dict=return_dict
-            )
+        if not return_dict:
+            return hidden_states
             
-            # If we resized the input, resize the output back to original shape
-            if sample.shape != original_shape:
-                if isinstance(output, dict) and 'sample' in output:
-                    output['sample'] = F.interpolate(output['sample'], 
-                                                size=(original_shape[2], original_shape[3]), 
-                                                mode='bilinear')
-                else:
-                    output = F.interpolate(output, 
-                                        size=(original_shape[2], original_shape[3]), 
-                                        mode='bilinear')
+        return UNetOutput(sample=hidden_states)
+    
+    
+    def _process_camera(self, camera, batch_size):
+        """
+        Process camera information into embeddings.
+        
+        Parameters:
+            camera: Camera information (dict, tensor, or None)
+            batch_size: Batch size for creating default embeddings if needed
             
-            del self.current_camera_embedding
-            return output
-            
+        Returns:
+            camera_embedding: Tensor of shape [batch_size, 1024]
+        """
+        if camera is None:
+            return torch.zeros(batch_size, 1024, device=self.device, dtype=self.dtype)
+        
+        if hasattr(camera, 'to'):
+            camera = camera.to(device=self.device)
+        
+        try:
+            # Convert camera format if needed
+            if not isinstance(camera, dict) and hasattr(camera, 'shape') and camera.shape[-2:] == (4, 4):
+                camera_dict = {
+                    'R': camera[:, :3, :3].to(device=self.device),  # Rotation matrix [B, 3, 3]
+                    'T': camera[:, :3, 3].to(device=self.device)    # Translation vector [B, 3]
+                }
+                return self.camera_encoder(camera_dict)
+            elif isinstance(camera, dict):
+                return self.camera_encoder(camera)
+            else:
+                # Unknown format, return zeros
+                return torch.zeros(batch_size, 1024, device=self.device, dtype=self.dtype)
+        except Exception as e:
+            # Log error and return zeros
+            logger.warning(f"Error processing camera: {str(e)}")
+            return torch.zeros(batch_size, 1024, device=self.device, dtype=self.dtype)
+
+
 
 def create_mvd_pipeline(
-    pretrained_model_name_or_path: str = "runwayml/stable-diffusion-v1-5",
-    dtype: torch.dtype = torch.float16,  # Using float16 for memory efficiency
+    pretrained_model_name_or_path: str,
+    dtype: torch.dtype = torch.float16,
     use_memory_efficient_attention: bool = True,
     enable_gradient_checkpointing: bool = True,
     cache_dir=None,

@@ -20,7 +20,6 @@ class MVDLightningModule(LightningModule):
         self.config = config
         self.save_hyperparameters(ignore=['pipeline'])
         
-        # Register pipeline components as modules
         self.unet = pipeline.unet
         self.vae = pipeline.vae
         self.text_encoder = pipeline.text_encoder
@@ -51,7 +50,7 @@ class MVDLightningModule(LightningModule):
         
         self.dirs = create_output_dirs(output_dir)
         self.ssim = SSIM(data_range=2.0, size_average=True)  # range [-1,1]
-        self.perceptual_loss = None #PerceptualLoss(device=self.device)
+        self.perceptual_loss = None # PerceptualLoss(device=self.device)
         self.training_step_outputs = []
         self.validation_step_outputs = []
 
@@ -59,11 +58,17 @@ class MVDLightningModule(LightningModule):
     def forward(self, batch):
         source_images = batch['source_image'].to(self.device)
         target_images = batch['target_image'].to(self.device)
+
+        source_latents = self.vae.encode(source_images).latent_dist.sample()
+        source_latents = source_latents * self.vae.config.scaling_factor
+        print(f"Source latents shape: {source_latents.shape}")
         
-        # The prompts are a list of strings, no need to move to device
+        target_latents = self.vae.encode(target_images).latent_dist.sample()
+        target_latents = target_latents * self.vae.config.scaling_factor
+        print(f"Target latents shape: {target_latents.shape}")        
+
         prompts = batch['prompt']
         
-        # Check if camera parameters exist in the batch and move to device if they do
         source_camera = batch.get('source_camera', None)
         target_camera = batch.get('target_camera', None)
         
@@ -72,7 +77,6 @@ class MVDLightningModule(LightningModule):
         if target_camera is not None:
             target_camera = target_camera.to(self.device)
         
-        # Debug logs to help troubleshoot
         print(f"In forward - source_camera: {type(source_camera)}, target_camera: {type(target_camera)}")
             
         text_input = self.tokenizer(
@@ -85,20 +89,17 @@ class MVDLightningModule(LightningModule):
         
         text_embeddings = self.text_encoder(text_input.input_ids)[0]
         
-        noise = torch.randn_like(source_images)
+        noise = torch.randn_like(source_latents)
         timesteps = torch.randint(
             0,
             self.scheduler.config.num_train_timesteps,
-            (source_images.shape[0],),
+            (source_latents.shape[0],),
             device=self.device
         )
-        noisy_images = self.scheduler.add_noise(source_images, noise, timesteps)
-        
-        # Add extra channel for noise prediction (alpha channel which can be used for inpainting)
-        noisy_images = torch.cat([noisy_images, torch.zeros_like(noisy_images[:, :1])], dim=1)
+        noisy_latents = self.scheduler.add_noise(source_latents, noise, timesteps)
         
         noise_pred = self.unet(
-            sample=noisy_images,
+            sample=noisy_latents,
             timestep=timesteps,
             encoder_hidden_states=text_embeddings,
             source_camera=source_camera,
@@ -107,71 +108,66 @@ class MVDLightningModule(LightningModule):
         
         alpha_t = self.scheduler.alphas_cumprod[timesteps]
         alpha_t = alpha_t.view(-1, 1, 1, 1)
-        denoised_images = (noisy_images - (1 - alpha_t).sqrt() * noise_pred) / alpha_t.sqrt()
+        denoised_latents = (noisy_latents - (1 - alpha_t).sqrt() * noise_pred) / alpha_t.sqrt()
         
-        return noise_pred, noise, denoised_images, target_images, source_images
+        return noise_pred, noise, denoised_latents, target_latents, source_latents
     
+
     def training_step(self, batch, batch_idx):
-        noise_pred, noise, denoised_images, target_images, source_images = self.forward(batch)
+        noise_pred, noise, denoised_latents, target_latents, source_latents = self.forward(batch)
         
-        # Compute losses
         losses = compute_losses(
             noise_pred=noise_pred,
             noise=noise,
-            denoised_images=denoised_images,
-            target_images=target_images,
-            source_images=source_images,
+            denoised_images=denoised_latents,
+            target_images=target_latents,
+            source_images=source_latents,
             perceptual_loss_fn=self.perceptual_loss,
             ssim_loss_fn=self.ssim,
             config=self.config
         )
         
-        # Log step metrics
         for name, value in losses.items():
             self.log(f"train/{name}_step", value.item() if torch.is_tensor(value) else value, 
                     on_step=True, prog_bar=True)
         
-        # Save for epoch-level computation
         self.training_step_outputs.append(
             {k: v.item() if torch.is_tensor(v) else v for k, v in losses.items()}
         )
         
-        # Save samples periodically
         if batch_idx % self.config.get('sample_interval', 100) == 0:
             self._save_generated_samples(batch, batch_idx, self.current_epoch)
         
         return losses['total_loss']
     
+
     def validation_step(self, batch, batch_idx):
-        noise_pred, noise, denoised_images, target_images, source_images = self.forward(batch)
+        noise_pred, noise, denoised_latents, target_latents, source_latents = self.forward(batch)
         
-        # Compute losses
         losses = compute_losses(
             noise_pred=noise_pred,
             noise=noise,
-            denoised_images=denoised_images,
-            target_images=target_images,
-            source_images=source_images,
+            denoised_images=denoised_latents,
+            target_images=target_latents,
+            source_images=source_latents,
             perceptual_loss_fn=self.perceptual_loss,
             ssim_loss_fn=self.ssim,
             config=self.config
         )
         
-        # Save for epoch-level computation
         self.validation_step_outputs.append(
             {k: v.item() if torch.is_tensor(v) else v for k, v in losses.items()}
         )
         
         return losses['total_loss']
     
+
     def configure_optimizers(self):
-        # Only optimize UNet parameters
         optimizer = torch.optim.Adam(
             filter(lambda p: p.requires_grad, self.unet.parameters()),
             lr=self.config['learning_rate']
         )
         
-        # Configure learning rate scheduler
         scheduler = torch.optim.lr_scheduler.LinearLR(
             optimizer,
             start_factor=1.0,
@@ -187,52 +183,77 @@ class MVDLightningModule(LightningModule):
             },
         }
     
+
     def _save_generated_samples(self, batch, batch_idx, epoch):
+        """
+        Generate and save samples during training.
+        
+        Parameters:
+            batch: The current batch
+            batch_idx: The batch index
+            epoch: The current epoch
+        """
         with torch.no_grad():
-            # Generate images
-            batch_size = len(batch['source_image'])
-            
-            # Check if camera parameters exist in the batch
             source_camera = batch.get('source_camera', None)
             target_camera = batch.get('target_camera', None)
             
-            # Debug logs
-            print(f"In _save_generated_samples - source_camera: {type(source_camera)}, target_camera: {type(target_camera)}")
+            # Ensure cameras are on the right device
+            if target_camera is not None and hasattr(target_camera, 'to'):
+                target_camera = target_camera.to(self.device)
             
-            # Call pipeline with safe parameters
-            images = self.pipeline(
-                prompt=batch['prompt'],
-                num_inference_steps=20,
-                source_camera=source_camera,
-                target_camera=target_camera,
-                num_images_per_prompt=1,
-                output_type="np"
-            ).images
+            if source_camera is not None and hasattr(source_camera, 'to'):
+                source_camera = source_camera.to(self.device)
             
-            # Save images
-            save_dir = self.dirs['samples'] / f"epoch_{epoch}"
-            save_dir.mkdir(exist_ok=True)
-            
-            for i, (source, target, generated) in enumerate(zip(
-                batch['source_image'],
-                batch['target_image'],
-                images
-            )):
-                # Convert tensors to numpy arrays (properly denormalized)
-                source_np = ((source.cpu().permute(1, 2, 0) + 1) / 2 * 255).numpy().astype('uint8')
-                target_np = ((target.cpu().permute(1, 2, 0) + 1) / 2 * 255).numpy().astype('uint8')
-                generated_np = (generated * 255).astype('uint8')
+            try:
+                # Generate images using the pipeline
+                images = self.pipeline(
+                    prompt=batch['prompt'],
+                    num_inference_steps=20,
+                    source_camera=source_camera,
+                    target_camera=target_camera,
+                    num_images_per_prompt=1,
+                    output_type="np"
+                )["images"]
                 
-                source_img    = Image.fromarray(source_np)
-                target_img    = Image.fromarray(target_np)
-                generated_img = Image.fromarray(generated_np)
-                source_img.save(save_dir / f'batch_{batch_idx}_sample_{i}_source.png')
-                target_img.save(save_dir / f'batch_{batch_idx}_sample_{i}_target.png')
-                generated_img.save(save_dir / f'batch_{batch_idx}_sample_{i}_generated.png')
-            
-            # Log images to wandb
-            wandb.log({
-                f"samples/epoch_{epoch}_batch_{batch_idx}": [
-                    wandb.Image(img) for img in images[:4]  # Log first 4 images
-                ]
-            }) 
+                # Create directory for saving samples
+                save_dir = self.dirs['samples'] / f"epoch_{epoch}"
+                save_dir.mkdir(exist_ok=True)
+                
+                # Save individual images
+                for i, (source, target, generated) in enumerate(zip(
+                    batch['source_image'],
+                    batch['target_image'],
+                    images
+                )):
+                    # Convert source and target images from [-1,1] to [0,255]
+                    source_np = ((source.cpu().permute(1, 2, 0) + 1) / 2 * 255).numpy().astype('uint8')
+                    target_np = ((target.cpu().permute(1, 2, 0) + 1) / 2 * 255).numpy().astype('uint8')
+                    
+                    # Convert generated image
+                    if isinstance(generated, torch.Tensor):
+                        generated_np = (generated.cpu().permute(1, 2, 0) * 255).numpy().astype('uint8')
+                    else:
+                        generated_np = (generated * 255).astype('uint8')
+                    
+                    # Create and save PIL images
+                    source_img    = Image.fromarray(source_np)
+                    target_img    = Image.fromarray(target_np)
+                    generated_img = Image.fromarray(generated_np)
+                    
+                    source_img.save(save_dir / f'batch_{batch_idx}_sample_{i}_source.png')
+                    target_img.save(save_dir / f'batch_{batch_idx}_sample_{i}_target.png')
+                    generated_img.save(save_dir / f'batch_{batch_idx}_sample_{i}_generated.png')
+                
+                # Log images to wandb
+                wandb.log({
+                    f"samples/epoch_{epoch}_batch_{batch_idx}": [
+                        wandb.Image(img) for img in images[:4]
+                    ]
+                })
+            except Exception as e:
+                logger.error(f"Error in sample generation: {str(e)}")
+                print(f"Prompt: {batch['prompt']}")
+                if source_camera is not None:
+                    print(f"Source camera type: {type(source_camera)}")
+                if target_camera is not None:
+                    print(f"Target camera type: {type(target_camera)}") 
