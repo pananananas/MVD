@@ -12,6 +12,11 @@
 
 echo "Run started"
 
-uv run main.py
+export PYTHONIOENCODING=utf-8
+export PYTHONUNBUFFERED=1
+export PYTHONUTF8=1
+export HTTP_TIMEOUT=300
+
+uv run main.py --max_concurrent_downloads=8 --max_download_retries=5 --batch_size=20
 
 echo "Run completed! :>"

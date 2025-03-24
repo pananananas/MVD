@@ -24,6 +24,7 @@ dependencies = [
     "pytorch-lightning>=2.5.0.post0",
     "pytorch-msssim>=1.0.0",
     "rich>=13.9.4",
+    "tenacity>=9.0.0",
     "torch>=2.6.0",
     "torchaudio>=2.6.0",
     "torchvision>=0.21.0",

@@ -11,13 +11,24 @@ import json
 import time
 import os
 import shutil
+import http.client
+import urllib.error
+import socket
+import sys
 
 import fire
 import fsspec
 import GPUtil
+import tenacity
 import pandas as pd
 from icecream import ic
 from loguru import logger
+from tenacity import (
+    retry, 
+    stop_after_attempt, 
+    wait_exponential, 
+    retry_if_exception_type
+)
 
 import objaverse.xl as oxl
 from objaverse.utils import get_uid_from_str
@@ -561,6 +572,8 @@ def render_objects(
     use_example_objects: bool = False,
     sample_size: int = 1_000_000,
     batch_size: int = 50,
+    max_download_retries: int = 5,
+    max_concurrent_downloads: int = 8,
 ) -> None:
     """Renders objects in the Objaverse-XL dataset with Blender"""
     if platform.system() not in ["Linux", "Darwin"]:
@@ -576,14 +589,28 @@ def render_objects(
             f"GitHub repos will not save. While {download_dir=} is specified, {save_repo_format=} None."
         )
 
+    # Try to install backoff if not already installed
+    try:
+        import tenacity
+    except ImportError:
+        logger.info("Installing tenacity package for retry functionality...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "tenacity"])
+        import tenacity
+        logger.info("Successfully installed tenacity package")
+
     # get the gpu devices to use
     parsed_gpu_devices: Union[int, List[int]] = 0
     if gpu_devices is None:
         parsed_gpu_devices = len(GPUtil.getGPUs())
     logger.info(f"Using {parsed_gpu_devices} GPU devices for rendering.")
 
+    # Limit the number of processes to avoid overwhelming the network
     if processes is None:
-        processes = multiprocessing.cpu_count() * 3
+        processes = min(multiprocessing.cpu_count(), max_concurrent_downloads)
+    else:
+        processes = min(processes, max_concurrent_downloads)
+    
+    logger.info(f"Using {processes} processes for downloads (limited to {max_concurrent_downloads})")
 
     # get the objects to render
     if use_example_objects:
@@ -623,65 +650,99 @@ def render_objects(
     # Group objects by source for more efficient batch processing
     objects_by_source = {source: group for source, group in objects.groupby("source")}
     
-    for source, source_objects in objects_by_source.items():
-        logger.info(f"Processing {len(source_objects)} objects from source: {source}")
+    # Patch the objaverse download method to include retries
+    original_download_objects = oxl.download_objects
+    
+    @retry(
+        stop=stop_after_attempt(max_download_retries),
+        wait=wait_exponential(multiplier=1, min=4, max=60),
+        retry=retry_if_exception_type((http.client.IncompleteRead, urllib.error.URLError, socket.timeout, ConnectionError)),
+        before_sleep=lambda retry_state: logger.info(f"Download attempt {retry_state.attempt_number} failed. Retrying in {retry_state.next_action.sleep} seconds...")
+    )
+    def download_objects_with_retry(*args, **kwargs):
+        # Add a timeout parameter if not already provided
+        if 'timeout' not in kwargs:
+            kwargs['timeout'] = 300  # 5 minutes timeout
         
-        # Process the source's objects in batches
-        for batch_start in range(0, len(source_objects), batch_size):
-            batch_end = min(batch_start + batch_size, len(source_objects))
-            batch_objects = source_objects.iloc[batch_start:batch_end].reset_index(drop=True)
+        try:
+            return original_download_objects(*args, **kwargs)
+        except (http.client.IncompleteRead, urllib.error.URLError, socket.timeout, ConnectionError) as e:
+            logger.warning(f"Download error: {str(e)}. Retrying...")
+            raise  # Re-raise for retry
+        except Exception as e:
+            logger.error(f"Unhandled exception during download: {str(e)}")
+            raise  # Re-raise any other exceptions
+    
+    # Temporarily replace the download_objects function
+    oxl.download_objects = download_objects_with_retry
+    
+    try:
+        for source, source_objects in objects_by_source.items():
+            logger.info(f"Processing {len(source_objects)} objects from source: {source}")
             
-            logger.info(f"Processing batch {batch_start//batch_size + 1}/{(len(source_objects) + batch_size - 1)//batch_size} "
-                       f"({batch_start}-{batch_end-1}) from {source}")
-            
-            try:
-                # Download and process just this batch
-                oxl.download_objects(
-                    objects=batch_objects,
-                    processes=processes,
-                    save_repo_format=save_repo_format,
-                    download_dir=download_dir,
-                    handle_found_object=partial(
-                        handle_found_object,
-                        render_dir=render_dir,
-                        num_renders=num_renders,
-                        only_northern_hemisphere=only_northern_hemisphere,
-                        gpu_devices=parsed_gpu_devices,
-                        render_timeout=render_timeout,
-                    ),
-                    handle_new_object=handle_new_object,
-                    handle_modified_object=partial(
-                        handle_modified_object,
-                        render_dir=render_dir,
-                        num_renders=num_renders,
-                        only_northern_hemisphere=only_northern_hemisphere,
-                        gpu_devices=parsed_gpu_devices,
-                        render_timeout=render_timeout,
-                    ),
-                    handle_missing_object=handle_missing_object,
-                    timeout=300,  # Add timeout parameter to avoid hanging downloads
-                )
+            # Process the source's objects in batches
+            for batch_start in range(0, len(source_objects), batch_size):
+                batch_end = min(batch_start + batch_size, len(source_objects))
+                batch_objects = source_objects.iloc[batch_start:batch_end].reset_index(drop=True)
                 
-                # Force garbage collection after each batch
-                import gc
-                gc.collect()
+                logger.info(f"Processing batch {batch_start//batch_size + 1}/{(len(source_objects) + batch_size - 1)//batch_size} "
+                           f"({batch_start}-{batch_end-1}) from {source}")
                 
-                logger.info(f"Successfully processed batch {batch_start//batch_size + 1} from {source}")
+                try:
+                    # Download and process just this batch with retry wrapper
+                    oxl.download_objects(
+                        objects=batch_objects,
+                        processes=processes,
+                        save_repo_format=save_repo_format,
+                        download_dir=download_dir,
+                        handle_found_object=partial(
+                            handle_found_object,
+                            render_dir=render_dir,
+                            num_renders=num_renders,
+                            only_northern_hemisphere=only_northern_hemisphere,
+                            gpu_devices=parsed_gpu_devices,
+                            render_timeout=render_timeout,
+                        ),
+                        handle_new_object=handle_new_object,
+                        handle_modified_object=partial(
+                            handle_modified_object,
+                            render_dir=render_dir,
+                            num_renders=num_renders,
+                            only_northern_hemisphere=only_northern_hemisphere,
+                            gpu_devices=parsed_gpu_devices,
+                            render_timeout=render_timeout,
+                        ),
+                        handle_missing_object=handle_missing_object,
+                        timeout=300,  # Add timeout parameter to avoid hanging downloads
+                    )
+                    
+                    # Force garbage collection after each batch
+                    import gc
+                    gc.collect()
+                    
+                    logger.info(f"Successfully processed batch {batch_start//batch_size + 1} from {source}")
+                    
+                    # Brief pause between batches to let the system stabilize
+                    time.sleep(5)  # Increased pause between batches
+                    
+                except subprocess.CalledProcessError as e:
+                    if "git lfs" in str(e):
+                        logger.error(f"Git LFS error in batch {batch_start//batch_size + 1} from {source}: {e}")
+                        logger.info("Continuing with next batch")
+                    else:
+                        logger.error(f"Error during batch {batch_start//batch_size + 1} download: {e}")
+                        # Don't raise - continue with next batch
+                        logger.info("Continuing with next batch despite error")
+                except Exception as e:
+                    logger.error(f"Unexpected error during batch {batch_start//batch_size + 1} download: {e}")
+                    logger.info("Continuing with next batch despite error")
                 
-                # Brief pause between batches to let the system stabilize
-                time.sleep(2)
-                
-            except subprocess.CalledProcessError as e:
-                if "git lfs" in str(e):
-                    logger.error(f"Git LFS error in batch {batch_start//batch_size + 1} from {source}: {e}")
-                    logger.info("Continuing with next batch")
-                else:
-                    logger.error(f"Error during batch {batch_start//batch_size + 1} download: {e}")
-                    raise
-            
-            # Log progress after each batch
-            logger.info(f"Completed {batch_end}/{len(source_objects)} objects from {source} "
-                       f"({batch_end/len(source_objects)*100:.1f}%)")
+                # Log progress after each batch
+                logger.info(f"Completed {batch_end}/{len(source_objects)} objects from {source} "
+                           f"({batch_end/len(source_objects)*100:.1f}%)")
+    finally:
+        # Restore the original download_objects function
+        oxl.download_objects = original_download_objects
     
     logger.info("All objects from all sources have been processed")
 
