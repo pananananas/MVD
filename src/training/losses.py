@@ -2,6 +2,8 @@ from torchvision.transforms import Normalize
 from torchvision.models import VGG16_Weights
 import torchvision.models as models
 import torch.nn.functional as F
+from pytorch_msssim import SSIM
+import torch
 
 class PerceptualLoss:
     def __init__(self, device='cuda'):
@@ -28,76 +30,89 @@ class PerceptualLoss:
         
         return F.mse_loss(x_features, y_features)
 
-def compute_geometric_consistency(generated, source, target):
+
+def compute_geometric_consistency(generated, target):
     """
-    Compute geometric consistency loss between views
-    For latent representations, we use a simple L1 loss
+    THIS IS A PLACEHOLDER FOR GEOMETRIC CONSISTENCY LOSS
+    TODO: Implement a proper geometric consistency loss
     """
     return F.l1_loss(generated, target)
 
-def compute_losses(noise_pred, noise, denoised_images, target_images, source_images, perceptual_loss_fn, ssim_loss_fn, config):
+
+def compute_losses(noise_pred, noise, denoised_latents, target_latents, vae, perceptual_loss_fn, ssim_loss_fn, config):
     """
-    Compute all loss components for MVD training
+    Compute all loss components for MVD training with proper space handling
     
     Args:
         noise_pred: Predicted noise (4-channel latent)
         noise: Ground truth noise (4-channel latent)
-        denoised_images: Generated images after denoising (4-channel latent)
-        target_images: Ground truth target view images (4-channel latent)
-        source_images: Source view images (4-channel latent)
+        denoised_latents: Generated images after denoising (4-channel latent)
+        target_latents: Ground truth target view images (4-channel latent)
+        source_latents: Source view images (4-channel latent)
+        vae: VAE model to decode latents to pixel space
         perceptual_loss_fn: Instance of PerceptualLoss
         ssim_loss_fn: Instance of SSIM
         config: Training configuration with loss weights
     """
-    # Debug logs to check loss functions
-    print(f"perceptual_loss_fn: {perceptual_loss_fn}")
-    print(f"ssim_loss_fn: {ssim_loss_fn}")
-    print(f"Type of perceptual_loss_fn: {type(perceptual_loss_fn)}")
-    print(f"Type of ssim_loss_fn: {type(ssim_loss_fn)}")
-    
+
     noise_loss = F.mse_loss(noise_pred, noise)
-    recon_loss = F.l1_loss(denoised_images, target_images)
+    latent_recon_loss = F.l1_loss(denoised_latents, target_latents)
     
-    # SSIM and perceptual losses can't work on 4-channel latents
-    # If needed, decode to pixel space first
-    # For now, we'll just use simpler losses
+    decoded_images = {}
     
-    # Perceptual loss - skip for latent space
-    if perceptual_loss_fn is None:
-        print("WARNING: perceptual_loss_fn is None! Using a default loss instead.")
-        perceptual_loss = recon_loss  # Use reconstruction loss as fallback
-    else:
-        print("WARNING: Perceptual loss not applicable in latent space, using recon_loss instead")
-        perceptual_loss = recon_loss
+    with torch.no_grad():
+        scaled_denoised = denoised_latents / vae.config.scaling_factor
+        scaled_target   = target_latents   / vae.config.scaling_factor
+        denoised_images = vae.decode(scaled_denoised).sample
+        target_images   = vae.decode(scaled_target).sample
+        
+        decoded_images['denoised'] = denoised_images
+        decoded_images['target']   = target_images
     
-    # Structural similarity loss - skip for latent space
-    if ssim_loss_fn is None:
-        print("WARNING: ssim_loss_fn is None! Using a default loss instead.")
-        ssim_value = 0.0
-        ssim_loss = 1.0
-    else:
-        print("WARNING: SSIM not applicable in latent space, using fixed value")
-        ssim_value = 0.0
-        ssim_loss = 1.0
+    pixel_recon_loss = F.l1_loss(denoised_images, target_images)
     
-    # Geometric consistency loss - works on latent space
-    geometric_loss = compute_geometric_consistency(denoised_images, source_images, target_images)
+    ssim_value = torch.tensor(0.0, device=noise_loss.device)
+    ssim_loss  = torch.tensor(1.0, device=noise_loss.device)
+    perceptual_loss = torch.tensor(0.0, device=noise_loss.device)
+    geometric_loss  = compute_geometric_consistency(denoised_images, target_images)
     
-    # Weight the loss components using config values
+    try:
+        if ssim_loss_fn is not None:
+            ssim_value = ssim_loss_fn(denoised_images, target_images)
+            ssim_loss = 1.0 - ssim_value  # Higher SSIM is better, so invert for loss
+    except Exception as e:
+        print(f"SSIM calculation error: {e}")
+    
+    try:
+        if perceptual_loss_fn is not None:
+            perceptual_loss = perceptual_loss_fn(denoised_images, target_images)
+    except Exception as e:
+        print(f"Perceptual loss calculation error: {e}")
+    
+    noise_weight        = config.get('noise_weight', 1.0)
+    latent_recon_weight = config.get('latent_recon_weight', 0.5)
+    pixel_recon_weight  = config.get('pixel_recon_weight', 1.0)
+    perceptual_weight   = config.get('perceptual_weight', 0.1)
+    ssim_weight         = config.get('ssim_weight', 0.1)
+    geometric_weight    = config.get('geometric_weight', 0.5)
+
     total_loss = (
-        1.0 * noise_loss +  # Make noise loss significant for latent training
-        0.5 * recon_loss +  # Reconstruction in latent space
-        config['perceptual_weight'] * perceptual_loss +
-        config['ssim_weight']       * ssim_loss +
-        config['geometric_weight']  * geometric_loss
+        noise_weight * noise_loss +
+        latent_recon_weight * latent_recon_loss +
+        pixel_recon_weight * pixel_recon_loss +
+        perceptual_weight * perceptual_loss +
+        ssim_weight * ssim_loss +
+        geometric_weight * geometric_loss
     )
     
     return {
         'total_loss': total_loss,
-        'noise_loss': noise_loss.item(),
-        'recon_loss': recon_loss.item(),
-        'perceptual_loss': perceptual_loss.item() if not isinstance(perceptual_loss, type(None)) else 0.0,
-        'ssim_loss': ssim_loss.item() if not isinstance(ssim_loss, float) else ssim_loss,
-        'geometric_loss': geometric_loss.item(),
-        'ssim_value': ssim_value.item() if not isinstance(ssim_value, float) else ssim_value
+        'noise_loss': noise_loss,
+        'latent_recon_loss': latent_recon_loss,
+        'pixel_recon_loss': pixel_recon_loss,
+        'perceptual_loss': perceptual_loss,
+        'ssim_loss': ssim_loss,
+        'ssim_value': ssim_value,
+        'geometric_loss': geometric_loss,
+        'decoded_images': decoded_images
     } 
