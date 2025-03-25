@@ -107,6 +107,7 @@ class MVDLightningModule(LightningModule):
             encoder_hidden_states=text_embeddings,
             source_camera=source_camera,
             target_camera=target_camera,
+            source_image_latents=source_latents,  # Pass source latents for conditioning
         ).sample
         
         alpha_t = self.scheduler.alphas_cumprod[timesteps]
@@ -207,20 +208,24 @@ class MVDLightningModule(LightningModule):
         with torch.no_grad():
             source_camera = batch.get('source_camera', None)
             target_camera = batch.get('target_camera', None)
+            source_images = batch.get('source_image', None)
             
             if target_camera is not None and hasattr(target_camera, 'to'):
                 target_camera = target_camera.to(self.device)
             
             if source_camera is not None and hasattr(source_camera, 'to'):
                 source_camera = source_camera.to(self.device)
+                
+            if source_images is not None and hasattr(source_images, 'to'):
+                source_images = source_images.to(self.device)
             
             try:
-
                 images = self.pipeline(
                     prompt=batch['prompt'],
                     num_inference_steps=20,
                     source_camera=source_camera,
                     target_camera=target_camera,
+                    source_images=source_images,  # Pass source images for conditioning
                     num_images_per_prompt=1,
                     output_type="np"
                 )["images"]
@@ -260,7 +265,9 @@ class MVDLightningModule(LightningModule):
                 if source_camera is not None:
                     print(f"Source camera type: {type(source_camera)}")
                 if target_camera is not None:
-                    print(f"Target camera type: {type(target_camera)}") 
+                    print(f"Target camera type: {type(target_camera)}")
+                if source_images is not None:
+                    print(f"Source images shape: {source_images.shape}") 
 
 
     def save_latent_comparisons(self, decoded_images, batch_idx, epoch, prefix="train"):

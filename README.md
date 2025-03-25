@@ -1,6 +1,15 @@
+Now:
+Myślę że to wczytywanie features z image encodera działa poprawnie, ale na ten moment nic nie robię z tymi features, trzeba sprawdzić w jaki sposób sygnał z features jest wykorzystywany w modelu MVAdapter.
+
+
+
+
+
 # Global tasks:
 - [ ] add prompts to the dataset
-
+- [ ] implement image conditioning
+- [ ] implement multi-view attention layer
+- [ ] change the camera condifitoning, they should be from input view to target view
 
 
 # TODO:

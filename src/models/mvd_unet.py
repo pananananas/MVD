@@ -1,6 +1,7 @@
 from typing import Optional, Dict, Any, NamedTuple
 from diffusers import UNet2DConditionModel
 from .camera_encoder import CameraEncoder
+from .image_encoder import ImageEncoder
 from .pipeline import MVDPipeline
 import torch.nn as nn
 import logging
@@ -39,6 +40,11 @@ class MultiViewUNet(nn.Module):
             self.base_unet.enable_gradient_checkpointing()
         
         self.camera_encoder = CameraEncoder(output_dim=1024).to(device=self.device, dtype=self.dtype)
+        
+        self.image_encoder = ImageEncoder(
+            pretrained_model_name_or_path=pretrained_model_name_or_path,
+            dtype=dtype
+        ).to(device=self.device, dtype=self.dtype)
         
         down_channels = self.config.block_out_channels
         up_channels   = list(reversed(down_channels))
@@ -88,6 +94,7 @@ class MultiViewUNet(nn.Module):
             self.dtype = dtype
             
         self.camera_encoder   = self.camera_encoder.to(device=device, dtype=dtype)
+        self.image_encoder    = self.image_encoder.to(device=device, dtype=dtype)
         self.down_modulators  = self.down_modulators.to(device=device, dtype=dtype)
         self.up_modulators    = self.up_modulators.to(device=device, dtype=dtype)
         self.mid_modulator    = self.mid_modulator.to(device=device, dtype=dtype)
@@ -103,6 +110,7 @@ class MultiViewUNet(nn.Module):
         encoder_hidden_states: torch.FloatTensor,
         source_camera: Optional[Dict[str, torch.Tensor]] = None,
         target_camera: Optional[Dict[str, torch.Tensor]] = None,
+        source_image_latents: Optional[torch.FloatTensor] = None,
         return_dict: bool = True,
         timestep_cond: Optional[torch.FloatTensor] = None,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
@@ -120,6 +128,35 @@ class MultiViewUNet(nn.Module):
         
         # Process camera information and generate camera embedding
         camera_embedding = self._process_camera(target_camera, sample.shape[0])
+        
+        # Process source image if provided
+        if source_image_latents is not None:
+            try:
+                # Create a proper timestep tensor for the image encoder
+                # Use timestep 0 (beginning of diffusion) for feature extraction
+                # But make sure it's a tensor with the right shape and device
+                batch_size = source_image_latents.shape[0]
+                encoder_timestep = torch.zeros(batch_size, device=self.device).long()
+                
+                # Extract features from source image latents
+                image_features = self.image_encoder(
+                    latents=source_image_latents,
+                    text_embeddings=encoder_hidden_states,
+                    timestep=encoder_timestep
+                )
+                
+                # Log the number of extracted features
+                feature_count = len(image_features)
+                logger.info(f"Extracted features from source image: {feature_count} attention layers")
+                
+                # In the future, we'll use these features for conditioning
+                # For now, we're just extracting and printing them
+            except Exception as e:
+                # Log any errors but continue without the image features
+                logger.warning(f"Error processing source image: {str(e)}")
+                logger.warning(f"Error details: {e.__class__.__name__}")
+                import traceback
+                logger.warning(traceback.format_exc())
         
         # Run the base UNet
         output = self.base_unet(

@@ -29,9 +29,9 @@ class MVDPipeline(StableDiffusionPipeline):
         callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
         callback_steps: int = 1,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
-        source_camera: Optional[torch.Tensor] = None,  # Added camera parameters
-        target_camera: Optional[torch.Tensor] = None,  # Added camera parameters
-        source_images: Optional[torch.Tensor] = None,  # Added source images
+        source_camera: Optional[torch.Tensor] = None,  # added camera parameters
+        target_camera: Optional[torch.Tensor] = None,  # added camera parameters
+        source_images: Optional[torch.Tensor] = None,  # added source images
     ):
         # Process prompts and embeddings as in the original pipeline
         if prompt is not None and isinstance(prompt, str):
@@ -89,6 +89,22 @@ class MVDPipeline(StableDiffusionPipeline):
                 generator,
             )
         
+        # Process source images if provided
+        source_image_latents = None
+        if source_images is not None:
+            # Move source images to the correct device
+            source_images = source_images.to(device=self.device)
+            
+            # Scale to [-1, 1] if in [0, 1] range
+            if source_images.min() >= 0 and source_images.max() <= 1:
+                source_images = 2 * source_images - 1
+                
+            # Encode source images to latent space
+            with torch.no_grad():
+                source_image_latents = self.vae.encode(source_images).latent_dist.sample()
+                source_image_latents = source_image_latents * self.vae.config.scaling_factor
+                print(f"Encoded source image to latent space: {source_image_latents.shape}")
+        
         # Set timesteps
         self.scheduler.set_timesteps(num_inference_steps, device=self.device)
         timesteps = self.scheduler.timesteps
@@ -99,6 +115,8 @@ class MVDPipeline(StableDiffusionPipeline):
             extra_kwargs["source_camera"] = source_camera.to(self.device)
         if target_camera is not None:
             extra_kwargs["target_camera"] = target_camera.to(self.device)
+        if source_image_latents is not None:
+            extra_kwargs["source_image_latents"] = source_image_latents
         
         # Diffusion process
         for i, t in enumerate(self.progress_bar(timesteps)):
@@ -111,7 +129,7 @@ class MVDPipeline(StableDiffusionPipeline):
                 timestep=t,
                 encoder_hidden_states=prompt_embeds,
                 cross_attention_kwargs=cross_attention_kwargs,
-                **extra_kwargs  # Pass camera parameters to UNet
+                **extra_kwargs  # Pass camera parameters and source image latents to UNet
             ).sample
             
             # Apply classifier-free guidance
