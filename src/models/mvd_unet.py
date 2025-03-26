@@ -121,27 +121,35 @@ class MultiViewUNet(nn.Module):
         timestep = timestep.to(device=self.device)
         encoder_hidden_states = encoder_hidden_states.to(device=self.device)
         
-        # Handle batch size mismatch between sample and encoder_hidden_states
+        # the batch size mismatch happens when we use classifier-free guidance
         if sample.shape[0] > encoder_hidden_states.shape[0]:
             repeat_factor = sample.shape[0] // encoder_hidden_states.shape[0]
             encoder_hidden_states = encoder_hidden_states.repeat(repeat_factor, 1, 1)
         
-        # Process camera information and generate camera embedding
         camera_embedding = self._process_camera(target_camera, sample.shape[0])
         
-        # Process source image if provided
+        # process source image if provided
         if source_image_latents is not None:
             try:
-                # Create a proper timestep tensor for the image encoder
-                # Use timestep 0 (beginning of diffusion) for feature extraction
-                # But make sure it's a tensor with the right shape and device
+                # use timestep 0 (beginning of diffusion) for feature extraction
                 batch_size = source_image_latents.shape[0]
                 encoder_timestep = torch.zeros(batch_size, device=self.device).long()
                 
-                # Extract features from source image latents
+                image_encoder_text_embeddings = encoder_hidden_states
+                
+                # if we're using classifier-free guidance (embeddings are duplicated),
+                # only use the conditional part (second half)
+                if encoder_hidden_states.shape[0] == 2 * batch_size:
+                    # take only the conditional embeddings (second half)
+                    image_encoder_text_embeddings = encoder_hidden_states[batch_size:]
+                elif encoder_hidden_states.shape[0] > batch_size:
+                    # take only what we need to match the batch size
+                    image_encoder_text_embeddings = encoder_hidden_states[:batch_size]
+                
+                # extract features from source image latents
                 image_features = self.image_encoder(
                     latents=source_image_latents,
-                    text_embeddings=encoder_hidden_states,
+                    text_embeddings=image_encoder_text_embeddings,
                     timestep=encoder_timestep
                 )
                 
@@ -155,6 +163,8 @@ class MultiViewUNet(nn.Module):
                 # Log any errors but continue without the image features
                 logger.warning(f"Error processing source image: {str(e)}")
                 logger.warning(f"Error details: {e.__class__.__name__}")
+                logger.warning(f"Source image latents shape: {source_image_latents.shape if source_image_latents is not None else None}")
+                logger.warning(f"Encoder hidden states shape: {encoder_hidden_states.shape}")
                 import traceback
                 logger.warning(traceback.format_exc())
         
