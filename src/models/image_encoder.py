@@ -134,21 +134,4 @@ class ImageEncoder(nn.Module):
                 return_dict=False
             )
         
-        # print the feature shapes for debugging
-        for name, features in self.extracted_features.items():
-            if isinstance(features, tuple):
-                # If it's a tuple, print the shape of each element
-                print(f"Image Encoder - {name}: tuple output with {len(features)} elements")
-                for i, feat in enumerate(features):
-                    if hasattr(feat, 'shape'):
-                        print(f"  - Element {i} shape: {feat.shape}")
-                    else:
-                        print(f"  - Element {i} type: {type(feat)}")
-            elif hasattr(features, 'shape'):
-                # If it's a tensor or has a shape attribute
-                print(f"Image Encoder - {name}: shape {features.shape}")
-            else:
-                # For any other type
-                print(f"Image Encoder - {name}: type {type(features)}")
-        
         return self.extracted_features

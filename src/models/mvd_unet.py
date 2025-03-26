@@ -1,9 +1,11 @@
+from .attention import get_attention_processor_for_module
 from typing import Optional, Dict, Any, NamedTuple
 from diffusers import UNet2DConditionModel
 from .camera_encoder import CameraEncoder
 from .image_encoder import ImageEncoder
 from .pipeline import MVDPipeline
 import torch.nn as nn
+import traceback
 import logging
 import torch
 
@@ -67,10 +69,80 @@ class MultiViewUNet(nn.Module):
         
         self.output_modulator = nn.Linear(1024, 4 * 2).to(device=self.device, dtype=self.dtype)
 
+        # Initialize attention processors for image cross-attention
+        self._init_image_cross_attention()
+
+
+    def _init_image_cross_attention(self):
+        """
+        Initialize image cross-attention processors for all attention layers in the UNet.
+        This replaces the default attention processors with our custom ImageCrossAttentionProcessor.
+        """
+        logger.info("Initializing image cross-attention processors")
+        
+        # Dictionary to store attention layer mappings
+        self.attention_layer_map = {}
+        
+        # Setup down blocks
+        for i, block in enumerate(self.base_unet.down_blocks):
+            if hasattr(block, 'attentions'):
+                for j, attn_block in enumerate(block.attentions):
+                    for transformer_block in attn_block.transformer_blocks:
+                        # Process attn1 (self-attention)
+                        name = f"down_block_{i}_attn_{j}_self"
+                        self._replace_attention_processor(transformer_block.attn1, name)
+                        
+                        # Process attn2 (cross-attention)
+                        name = f"down_block_{i}_attn_{j}_cross"
+                        self._replace_attention_processor(transformer_block.attn2, name)
+        
+        # Setup mid block
+        if hasattr(self.base_unet.mid_block, 'attentions'):
+            for j, attn_block in enumerate(self.base_unet.mid_block.attentions):
+                for transformer_block in attn_block.transformer_blocks:
+                    # Process attn1 (self-attention)
+                    name = f"mid_block_attn_{j}_self"
+                    self._replace_attention_processor(transformer_block.attn1, name)
+                    
+                    # Process attn2 (cross-attention)
+                    name = f"mid_block_attn_{j}_cross"
+                    self._replace_attention_processor(transformer_block.attn2, name)
+        
+        # Setup up blocks
+        for i, block in enumerate(self.base_unet.up_blocks):
+            if hasattr(block, 'attentions'):
+                for j, attn_block in enumerate(block.attentions):
+                    for transformer_block in attn_block.transformer_blocks:
+                        # Process attn1 (self-attention)
+                        name = f"up_block_{i}_attn_{j}_self"
+                        self._replace_attention_processor(transformer_block.attn1, name)
+                        
+                        # Process attn2 (cross-attention)
+                        name = f"up_block_{i}_attn_{j}_cross"
+                        self._replace_attention_processor(transformer_block.attn2, name)
+        
+        logger.info(f"Initialized image cross-attention for {len(self.attention_layer_map)} attention layers")
+    
+    def _replace_attention_processor(self, attn_module, name):
+        """
+        Replace the attention processor with our image cross-attention processor.
+        
+        Args:
+            attn_module: Attention module to modify
+            name: Unique identifier for this attention layer
+        """
+        # Get processor for this module
+        processor = get_attention_processor_for_module(name, attn_module)
+        
+        # Save mapping from name to module for debugging
+        self.attention_layer_map[name] = attn_module
+        
+        # Set the processor
+        attn_module.processor = processor
+
 
     def apply_modulation(self, hidden_states, modulator, camera_embedding):
-        """Apply scale and shift modulation to hidden states"""
-        # Generate scale and shift
+        """apply scale and shift modulation to hidden states"""
         modulation = modulator(camera_embedding)  # [B, C*2]
         scale, shift = modulation.chunk(2, dim=-1)  # Each [B, C]
         
@@ -128,6 +200,13 @@ class MultiViewUNet(nn.Module):
         
         camera_embedding = self._process_camera(target_camera, sample.shape[0])
         
+        # apply camera modulation for output channels (should be 4 for latent space)
+        if sample.shape[1] == 4:
+            sample = self.apply_modulation(sample, self.output_modulator, camera_embedding)
+        
+        # Initialize reference hidden states dictionary
+        ref_hidden_states = None
+        
         # process source image if provided
         if source_image_latents is not None:
             try:
@@ -153,22 +232,31 @@ class MultiViewUNet(nn.Module):
                     timestep=encoder_timestep
                 )
                 
-                # Log the number of extracted features
                 feature_count = len(image_features)
                 logger.info(f"Extracted features from source image: {feature_count} attention layers")
                 
-                # In the future, we'll use these features for conditioning
-                # For now, we're just extracting and printing them
+                # Map image features to UNet attention layers
+                ref_hidden_states = self._map_image_features_to_attention_layers(image_features)
+                
+                # Log feature mapping for debugging
+                logger.info(f"Mapped {len(ref_hidden_states)} image features to attention layers")
+                
             except Exception as e:
-                # Log any errors but continue without the image features
                 logger.warning(f"Error processing source image: {str(e)}")
                 logger.warning(f"Error details: {e.__class__.__name__}")
                 logger.warning(f"Source image latents shape: {source_image_latents.shape if source_image_latents is not None else None}")
                 logger.warning(f"Encoder hidden states shape: {encoder_hidden_states.shape}")
-                import traceback
+
                 logger.warning(traceback.format_exc())
         
-        # Run the base UNet
+        # Update cross_attention_kwargs to include reference hidden states
+        if cross_attention_kwargs is None:
+            cross_attention_kwargs = {}
+            
+        if ref_hidden_states is not None:
+            cross_attention_kwargs["ref_hidden_states"] = ref_hidden_states
+        
+        # run the denoising UNet
         output = self.base_unet(
             sample=sample,
             timestep=timestep,
@@ -179,17 +267,146 @@ class MultiViewUNet(nn.Module):
             added_cond_kwargs=added_cond_kwargs,
         )
         
-        # Get output from base UNet
+        # get the output from the denoising UNet
         hidden_states = output.sample
-        
-        # Apply camera modulation for output channels (should be 4 for latent space)
-        if hidden_states.shape[1] == 4:
-            hidden_states = self.apply_modulation(hidden_states, self.output_modulator, camera_embedding)
         
         if not return_dict:
             return hidden_states
             
         return UNetOutput(sample=hidden_states)
+    
+    
+    # TODO: Improve that
+    def _map_image_features_to_attention_layers(self, image_features):
+        """
+        Maps features extracted from the image encoder to the appropriate attention layers.
+        
+        Args:
+            image_features: Dictionary of features from the image encoder
+            
+        Returns:
+            Dictionary mapping attention layer names to corresponding image features
+        """
+        ref_hidden_states = {}
+        
+        # First, let's create a more structured mapping of our attention layers
+        attention_layers_info = {
+            "down": {},
+            "mid": {},
+            "up": {}
+        }
+        
+        # Organize attention layers by block and level
+        for name in self.attention_layer_map.keys():
+            if name.startswith("down_block_"):
+                parts = name.split("_")
+                block_idx = int(parts[2])
+                if block_idx not in attention_layers_info["down"]:
+                    attention_layers_info["down"][block_idx] = []
+                attention_layers_info["down"][block_idx].append(name)
+            elif name.startswith("mid_block"):
+                attention_layers_info["mid"].setdefault(0, []).append(name)
+            elif name.startswith("up_block_"):
+                parts = name.split("_")
+                block_idx = int(parts[2])
+                if block_idx not in attention_layers_info["up"]:
+                    attention_layers_info["up"][block_idx] = []
+                attention_layers_info["up"][block_idx].append(name)
+        
+        # Also organize image features by block and level
+        image_features_info = {
+            "down": {},
+            "mid": {},
+            "up": {}
+        }
+        
+        for key, feature in image_features.items():
+            if key.startswith("down_block_"):
+                parts = key.split("_")
+                block_idx = int(parts[2])
+                if block_idx not in image_features_info["down"]:
+                    image_features_info["down"][block_idx] = []
+                image_features_info["down"][block_idx].append((key, feature))
+            elif key.startswith("mid_block"):
+                image_features_info["mid"].setdefault(0, []).append((key, feature))
+            elif key.startswith("up_block_"):
+                parts = key.split("_")
+                block_idx = int(parts[2])
+                if block_idx not in image_features_info["up"]:
+                    image_features_info["up"][block_idx] = []
+                image_features_info["up"][block_idx].append((key, feature))
+        
+        logger.info(f"Mapping features with semantically similar positions:")
+        
+        # Now let's match features to attention layers based on similar position in the network
+        for section in ["down", "mid", "up"]:
+            for block_idx in attention_layers_info[section]:
+                if block_idx not in image_features_info[section]:
+                    continue
+                
+                attn_layers = attention_layers_info[section][block_idx]
+                features = image_features_info[section][block_idx]
+                
+                # If we have equal numbers, do a direct mapping
+                if len(features) == len(attn_layers):
+                    for i, (feat_name, feat) in enumerate(features):
+                        layer_name = attn_layers[i]
+                        if isinstance(feat, tuple):
+                            feat = feat[0]
+                        ref_hidden_states[layer_name] = feat
+                        logger.debug(f"Direct map: {feat_name} → {layer_name}")
+                else:
+                    # If numbers don't match, map features to most appropriate layers
+                    # For now, distribute the features evenly across the layers
+                    for i, layer_name in enumerate(attn_layers):
+                        feat_idx = min(i % len(features), len(features) - 1)
+                        _, feat = features[feat_idx]
+                        if isinstance(feat, tuple):
+                            feat = feat[0]
+                        ref_hidden_states[layer_name] = feat
+                        logger.debug(f"Distributed map: feature {feat_idx} → {layer_name}")
+        
+        # Ensure all attention layers have a feature
+        for name in self.attention_layer_map:
+            if name not in ref_hidden_states:
+                # Find the closest feature based on similar location in network
+                if name.startswith("down_block_"):
+                    parts = name.split("_")
+                    block_idx = int(parts[2])
+                    # Try to find a feature from the same block level
+                    for search_idx in range(block_idx, -1, -1):
+                        if search_idx in image_features_info["down"] and image_features_info["down"][search_idx]:
+                            feat_name, feat = image_features_info["down"][search_idx][0]
+                            if isinstance(feat, tuple):
+                                feat = feat[0]
+                            ref_hidden_states[name] = feat
+                            logger.debug(f"Fallback map: {feat_name} → {name}")
+                            break
+                elif name.startswith("mid_block"):
+                    # Try down_blocks last level or up_blocks first level
+                    if image_features_info["mid"] and 0 in image_features_info["mid"]:
+                        feat_name, feat = image_features_info["mid"][0][0]
+                        if isinstance(feat, tuple):
+                            feat = feat[0]
+                        ref_hidden_states[name] = feat
+                        logger.debug(f"Fallback map: {feat_name} → {name}")
+                elif name.startswith("up_block_"):
+                    parts = name.split("_")
+                    block_idx = int(parts[2])
+                    # Try to find a feature from the same block level
+                    for search_idx in range(block_idx, len(attention_layers_info["up"])):
+                        if search_idx in image_features_info["up"] and image_features_info["up"][search_idx]:
+                            feat_name, feat = image_features_info["up"][search_idx][0]
+                            if isinstance(feat, tuple):
+                                feat = feat[0]
+                            ref_hidden_states[name] = feat
+                            logger.debug(f"Fallback map: {feat_name} → {name}")
+                            break
+        
+        # Count how many layers were successfully mapped
+        logger.info(f"Mapped {len(ref_hidden_states)}/{len(self.attention_layer_map)} attention layers to image features")
+        
+        return ref_hidden_states
     
     
     def _process_camera(self, camera, batch_size):

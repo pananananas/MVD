@@ -16,3 +16,4 @@ logs/
 objaverse/
 .env
 .env.local
+validation_results/

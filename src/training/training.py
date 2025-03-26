@@ -166,9 +166,8 @@ class MVDLightningModule(LightningModule):
                       for k, v in losses.items() if k != 'decoded_images'}
         self.validation_step_outputs.append(step_output)
         
-        if batch_idx % self.config.get('sample_interval', 100) == 0:
-            self._save_generated_samples(batch, batch_idx, self.current_epoch)
-            # self._save_latent_comparisons(losses['decoded_images'], batch_idx, self.current_epoch)
+        self._save_generated_samples(batch, batch_idx, self.current_epoch)
+        # self._save_latent_comparisons(losses['decoded_images'], batch_idx, self.current_epoch)
         
         return losses['total_loss']
     
