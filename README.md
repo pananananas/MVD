@@ -9,7 +9,7 @@ Myślę że to wczytywanie features z image encodera działa poprawnie, ale na t
 - [ ] add prompts to the dataset
 - [ ] implement image conditioning
 - [ ] implement multi-view attention layer
-- [ ] change the camera condifitoning, they should be from input view to target view
+- [ ] change the camera conditioning, they should be from input view to target view
 
 
 # TODO:

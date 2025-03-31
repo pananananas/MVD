@@ -23,6 +23,7 @@ dependencies = [
     "pillow>=11.1.0",
     "pytorch-lightning>=2.5.0.post0",
     "pytorch-msssim>=1.0.0",
+    "qwen-vl-utils>=0.0.10",
     "rich>=13.9.4",
     "seaborn>=0.13.2",
     "tenacity>=9.0.0",
@@ -30,6 +31,6 @@ dependencies = [
     "torchaudio>=2.6.0",
     "torchvision>=0.21.0",
     "tqdm>=4.67.1",
-    "transformers>=4.48.3",
+    "transformers==4.50.3",
     "wandb>=0.19.6",
 ]

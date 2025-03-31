@@ -17,3 +17,4 @@ objaverse/
 .env
 .env.local
 validation_results/
+src/data/cleaning/output_visualizations
