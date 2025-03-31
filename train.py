@@ -1,4 +1,4 @@
-from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from src.data.objaverse_dataset import ObjaverseDataModule
 from pytorch_lightning.loggers import WandbLogger
 from src.training.training import MVDLightningModule
@@ -12,13 +12,14 @@ import yaml
 import os
 
 torch.set_float32_matmul_precision('high')
-# SCRATCH = os.getenv('SCRATCH', '/net/tscratch/people/plgewoj')
-# HUGGINGFACE_CACHE = os.path.join(SCRATCH, 'huggingface_cache')
-# os.makedirs(HUGGINGFACE_CACHE, exist_ok=True)
-# os.environ['HF_HOME'] = HUGGINGFACE_CACHE
+SCRATCH = os.getenv('SCRATCH', '/net/tscratch/people/plgewoj')
+HUGGINGFACE_CACHE = os.path.join(SCRATCH, 'huggingface_cache')
+os.makedirs(HUGGINGFACE_CACHE, exist_ok=True)
+os.environ['HF_HOME'] = HUGGINGFACE_CACHE
 
 
-dataset_path = "/Users/ewojcik/Code/pwr/MVD/objaverse"
+# dataset_path = "/Users/ewojcik/Code/pwr/MVD/objaverse"
+dataset_path = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/"
 
 def main(config):
 
@@ -42,7 +43,7 @@ def main(config):
         dtype=getattr(torch, config['torch_dtype']),
         use_memory_efficient_attention=config['use_memory_efficient_attention'],
         enable_gradient_checkpointing=config['enable_gradient_checkpointing'],
-        # cache_dir=HUGGINGFACE_CACHE,
+        cache_dir=HUGGINGFACE_CACHE,
     )
     
 
@@ -56,14 +57,9 @@ def main(config):
         ModelCheckpoint(
             dirpath="outputs/checkpoints",
             filename="mvd-{epoch:02d}-{val_loss:.2f}",
-            monitor="val/total_loss",
+            monitor="val/noise_loss",
             mode="min",
             save_top_k=config['max_checkpoints'],
-        ),
-        EarlyStopping(
-            monitor="val/total_loss",
-            patience=config['early_stopping_patience'],
-            mode="min",
         ),
         LearningRateMonitor(logging_interval='step'),
     ]

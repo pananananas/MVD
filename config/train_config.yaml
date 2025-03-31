@@ -21,7 +21,7 @@ image_size:
 - 512
 - 512
 max_views_per_object: 8
-max_samples: null  # Set to null for full dataset
+max_samples: 100       # Set to null for full dataset
 num_gpus: 1
 
 # Loss weights

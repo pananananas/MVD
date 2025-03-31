@@ -122,7 +122,15 @@ def main():
     # Create data module (same as in training)
     logger.info("Setting up data module...")
     dataset_path = args.dataset_path or args.data_dir or config.get("dataset_path", None)
-    dataset_path = "/Users/ewojcik/Code/pwr/MVD/objaverse"
+    # dataset_path = "/Users/ewojcik/Code/pwr/MVD/objaverse"
+    SCRATCH = os.getenv('SCRATCH', '/net/tscratch/people/plgewoj')
+    HUGGINGFACE_CACHE = os.path.join(SCRATCH, 'huggingface_cache')
+    os.makedirs(HUGGINGFACE_CACHE, exist_ok=True)
+    os.environ['HF_HOME'] = HUGGINGFACE_CACHE
+
+
+    # dataset_path = "/Users/ewojcik/Code/pwr/MVD/objaverse"
+    dataset_path = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/"
     if not dataset_path:
         raise ValueError("Dataset path not specified in args or config")
     
