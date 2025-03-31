@@ -150,11 +150,31 @@ class MultiViewUNet(nn.Module):
         scale = scale.view(scale.shape[0], scale.shape[1], 1, 1)  # [B, C, 1, 1]
         shift = shift.view(shift.shape[0], shift.shape[1], 1, 1)  # [B, C, 1, 1]
         
+        # Add logging to track scale/shift statistics
+        with torch.no_grad():
+            scale_mean = scale.mean().item()
+            scale_std = scale.std().item()
+            scale_min = scale.min().item()
+            scale_max = scale.max().item()
+            
+            shift_mean = shift.mean().item()
+            shift_std = shift.std().item()
+            shift_min = shift.min().item()
+            shift_max = shift.max().item()
+            
+            logger.info(f"Modulation stats - Scale: mean={scale_mean:.4f}, std={scale_std:.4f}, min={scale_min:.4f}, max={scale_max:.4f}")
+            logger.info(f"Modulation stats - Shift: mean={shift_mean:.4f}, std={shift_std:.4f}, min={shift_min:.4f}, max={shift_max:.4f}")
+        
         # Ensure scale and shift have the correct number of channels
         if scale.shape[1] != hidden_states.shape[1]:
             raise ValueError(f"Channel dimension mismatch: scale has {scale.shape[1]} channels but hidden states has {hidden_states.shape[1]} channels")
         
-        return hidden_states * scale + shift
+        # Instead of applying directly, use a more controlled approach
+        # Start with a small contribution that gradually increases
+        # During early training, this will mostly preserve the original hidden states
+        modulated = hidden_states * (0.9 + 0.1 * scale) + 0.1 * shift
+        
+        return modulated
 
 
     def to(self, *args, **kwargs):

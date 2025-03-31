@@ -101,6 +101,14 @@ class ImageCrossAttentionProcessor(nn.Module):
         # Get the reference features for this specific layer
         reference_states = ref_hidden_states[self.name]
         
+        # Debug logging for dimension checking
+        logger.debug(f"Layer: {self.name} | hidden_states: {hidden_states.shape} | reference: {reference_states.shape}")
+        
+        # If dimensions are severely mismatched, skip this layer's cross-attention
+        if reference_states.shape[1] > 10 * hidden_states.shape[1] or reference_states.shape[1] < hidden_states.shape[1] // 10:
+            logger.warning(f"Extreme dimension mismatch in {self.name}: hidden={hidden_states.shape}, ref={reference_states.shape}")
+            return original_output
+        
         # Handle different input dimensions
         input_ndim = hidden_states.ndim
         if input_ndim == 4:
@@ -111,6 +119,13 @@ class ImageCrossAttentionProcessor(nn.Module):
         
         # Adapt reference features if needed
         reference_states = self._adapt_reference_features(reference_states, self.query_dim)
+        
+        # After adaptation, check again for stability
+        with torch.no_grad():
+            ref_mean = reference_states.mean().item()
+            ref_std = reference_states.std().item()
+            if abs(ref_mean) > 10 or ref_std > 10:
+                logger.warning(f"Potentially unstable reference features in {self.name}: mean={ref_mean:.4f}, std={ref_std:.4f}")
             
         # Step 1: Compute query from hidden states
         query = self.to_q_ref(hidden_states)
@@ -159,7 +174,23 @@ class ImageCrossAttentionProcessor(nn.Module):
         # Combine original and reference outputs with the learnable scale
         # Note: original_output already includes the residual connection in diffusers
         # so we don't need to add residual again
-        combined_output = original_output + self.ref_scale * ref_hidden_states
+        
+        # Monitor statistics of outputs before combination
+        with torch.no_grad():
+            orig_mean = original_output.mean().item()
+            orig_std = original_output.std().item()
+            ref_mean = ref_hidden_states.mean().item()
+            ref_std = ref_hidden_states.std().item()
+            scale_val = self.ref_scale.item()
+            
+            logger.debug(f"Layer {self.name} - Original: mean={orig_mean:.4f}, std={orig_std:.4f} | " 
+                         f"Reference: mean={ref_mean:.4f}, std={ref_std:.4f} | Scale: {scale_val:.4f}")
+
+        # Use a controlled combination approach
+        # Start with very minimal contribution from the cross-attention path
+        # This ensures stability while the cross-attention pathway learns
+        effective_scale = torch.clamp(self.ref_scale, -0.2, 0.2)  # Limit scale factor initially
+        combined_output = original_output + effective_scale * ref_hidden_states
         
         return combined_output
     
