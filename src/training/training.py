@@ -16,7 +16,7 @@ class MVDLightningModule(LightningModule):
         self,
         pipeline,
         config,
-        output_dir="outputs"
+        dirs
     ):
         super().__init__()
         self.config = config
@@ -50,8 +50,8 @@ class MVDLightningModule(LightningModule):
         logger.info(f"Trainable parameters: {trainable_params:,}")
         logger.info(f"Training: {percentage:.2f}% of the model")
         
-        self.dirs = create_output_dirs(output_dir)
-        self.comparison_dir = Path(output_dir) / "comparisons"
+        self.dirs = dirs
+        self.comparison_dir = self.dirs['comparisons']
         self.comparison_dir.mkdir(exist_ok=True, parents=True)
         
         # Initialize both loss functions properly

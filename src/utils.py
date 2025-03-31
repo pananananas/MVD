@@ -77,6 +77,7 @@ def create_output_dirs(base_dir):
     
     dirs = {
         'checkpoints': run_dir / 'checkpoints',
+        'comparisons': run_dir / 'comparisons',
         'samples': run_dir / 'samples',
         'logs': run_dir / 'logs'
     }

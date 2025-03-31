@@ -3,6 +3,7 @@ from src.data.objaverse_dataset import ObjaverseDataModule
 from pytorch_lightning.loggers import WandbLogger
 from src.training.training import MVDLightningModule
 from src.models.mvd_unet import create_mvd_pipeline
+from src.utils import create_output_dirs
 from pytorch_lightning import Trainer
 from pathlib import Path
 import argparse
@@ -10,6 +11,7 @@ import wandb
 import torch
 import yaml
 import os
+
 
 torch.set_float32_matmul_precision('high')
 SCRATCH = os.getenv('SCRATCH', '/net/tscratch/people/plgewoj')
@@ -45,17 +47,18 @@ def main(config):
         enable_gradient_checkpointing=config['enable_gradient_checkpointing'],
         cache_dir=HUGGINGFACE_CACHE,
     )
-    
+
+    dirs = create_output_dirs(config['output_dir'])
 
     model = MVDLightningModule(
         pipeline=pipeline,
         config=config,
-        output_dir="outputs"
+        dirs=dirs
     )
     
     callbacks = [
         ModelCheckpoint(
-            dirpath="outputs/checkpoints",
+            dirpath=dirs['checkpoints'],
             filename="mvd-{epoch:02d}-{val_loss:.2f}",
             monitor="val/noise_loss",
             mode="min",
