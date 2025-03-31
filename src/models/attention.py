@@ -7,12 +7,6 @@ import torch
 logger = logging.getLogger(__name__)
 
 class ImageCrossAttentionProcessor(nn.Module):
-    """
-    Attention processor that adds image-based cross-attention to the standard attention mechanism.
-    
-    This processor preserves the original attention computation and adds a parallel
-    path for image cross-attention, combining the results with a learnable scale factor.
-    """
     def __init__(
         self,
         name: str,
@@ -102,12 +96,18 @@ class ImageCrossAttentionProcessor(nn.Module):
         reference_states = ref_hidden_states[self.name]
         
         # Debug logging for dimension checking
-        logger.debug(f"Layer: {self.name} | hidden_states: {hidden_states.shape} | reference: {reference_states.shape}")
+        logger.info(f"Layer: {self.name} | hidden_states: {hidden_states.shape} | reference: {reference_states.shape}")
         
-        # If dimensions are severely mismatched, skip this layer's cross-attention
-        if reference_states.shape[1] > 10 * hidden_states.shape[1] or reference_states.shape[1] < hidden_states.shape[1] // 10:
-            logger.warning(f"Extreme dimension mismatch in {self.name}: hidden={hidden_states.shape}, ref={reference_states.shape}")
-            return original_output
+        # If dimensions are severely mismatched before adaptation, skip this layer's cross-attention
+        if reference_states.ndim == 4:
+            b, c, h, w = reference_states.shape
+            seq_len = h * w
+            
+            # Check if the spatial dimensions would create a sequence length far from what we need
+            hidden_seq_len = hidden_states.shape[1]
+            if seq_len > 10 * hidden_seq_len or seq_len < hidden_seq_len // 10:
+                logger.warning(f"Extreme sequence length mismatch in {self.name}: hidden={hidden_seq_len}, ref={seq_len}")
+                return original_output
         
         # Handle different input dimensions
         input_ndim = hidden_states.ndim
@@ -120,12 +120,48 @@ class ImageCrossAttentionProcessor(nn.Module):
         # Adapt reference features if needed
         reference_states = self._adapt_reference_features(reference_states, self.query_dim)
         
+        # After adaptation, check for sequence length compatibility
+        if reference_states.shape[1] > 10 * sequence_length or reference_states.shape[1] < sequence_length // 10:
+            logger.warning(f"Sequence length mismatch after adaptation in {self.name}: hidden={sequence_length}, ref={reference_states.shape[1]}")
+            
+            # If dimensions are still extremely mismatched, we can try to fix it by resampling
+            if reference_states.shape[1] > sequence_length:
+                # Downsample by average pooling over the sequence dimension
+                ratio = reference_states.shape[1] // sequence_length
+                remainder = reference_states.shape[1] % sequence_length
+                if remainder > 0:
+                    # Add padding to make it divisible
+                    padding = torch.zeros(batch_size, ratio - remainder, reference_states.shape[2], 
+                                         device=reference_states.device, dtype=reference_states.dtype)
+                    reference_states = torch.cat([reference_states, padding], dim=1)
+                
+                # Reshape to [B, sequence_length, ratio, D]
+                reference_states = reference_states.view(batch_size, sequence_length, -1, reference_states.shape[2])
+                # Average pool over the third dimension
+                reference_states = reference_states.mean(dim=2)
+                logger.info(f"Downsampled reference features from {reference_states.shape[1]*ratio} to {reference_states.shape[1]} tokens")
+            elif reference_states.shape[1] < sequence_length:
+                # Upsample by repeating
+                repeat_factor = sequence_length // reference_states.shape[1]
+                reference_states = reference_states.repeat_interleave(repeat_factor, dim=1)
+                
+                # If still not matched, pad with zeros
+                if reference_states.shape[1] < sequence_length:
+                    padding = torch.zeros(batch_size, sequence_length - reference_states.shape[1], reference_states.shape[2],
+                                         device=reference_states.device, dtype=reference_states.dtype)
+                    reference_states = torch.cat([reference_states, padding], dim=1)
+                logger.info(f"Upsampled reference features from {reference_states.shape[1]//repeat_factor} to {reference_states.shape[1]} tokens")
+        
         # After adaptation, check again for stability
         with torch.no_grad():
             ref_mean = reference_states.mean().item()
             ref_std = reference_states.std().item()
             if abs(ref_mean) > 10 or ref_std > 10:
                 logger.warning(f"Potentially unstable reference features in {self.name}: mean={ref_mean:.4f}, std={ref_std:.4f}")
+                # Normalize if necessary to prevent instability
+                if ref_std > 0:
+                    reference_states = (reference_states - ref_mean) / ref_std
+                    logger.info(f"Normalized reference features to improve stability")
             
         # Step 1: Compute query from hidden states
         query = self.to_q_ref(hidden_states)
@@ -171,10 +207,6 @@ class ImageCrossAttentionProcessor(nn.Module):
                 batch_size, channel, height, width
             )
         
-        # Combine original and reference outputs with the learnable scale
-        # Note: original_output already includes the residual connection in diffusers
-        # so we don't need to add residual again
-        
         # Monitor statistics of outputs before combination
         with torch.no_grad():
             orig_mean = original_output.mean().item()
@@ -208,8 +240,8 @@ class ImageCrossAttentionProcessor(nn.Module):
         # Get the shape of reference states
         if reference_states.ndim == 4:
             batch_size, channels, height, width = reference_states.shape
-            # Flatten spatial dimensions
-            reference_states = reference_states.view(batch_size, channels, -1).transpose(1, 2)
+            # Reshape from [B, C, H, W] to [B, H*W, C]
+            reference_states = reference_states.permute(0, 2, 3, 1).reshape(batch_size, height * width, channels)
         
         # Check if we need to adapt the feature dimension
         feature_dim = reference_states.shape[-1]
@@ -235,8 +267,6 @@ class ImageCrossAttentionProcessor(nn.Module):
                     
             # Apply adaptation
             reference_states = self.feature_adapter(reference_states)
-            
-            logger.debug(f"Adapted reference feature from dim={feature_dim} to dim={target_dim}")
             
         return reference_states
     

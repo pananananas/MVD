@@ -90,9 +90,39 @@ class ImageEncoder(nn.Module):
     def _hook_fn(self, name, output):
         """Store the output of the attention layer"""
         if isinstance(output, tuple):
-            self.extracted_features[name] = output
+            # Most likely the output is the attention output (features we want) 
+            # followed by attention weights which we don't need
+            self.extracted_features[name] = output[0]  # Take just the hidden states
         else:
             self.extracted_features[name] = output
+            
+        # Log the shape to help with debugging
+        feat = self.extracted_features[name]
+        logger.debug(f"Extracted feature '{name}' with shape {feat.shape}")
+        
+        # If it's a 3D tensor (B, L, D), make it 4D for consistency
+        # This helps with dimension matching later
+        if feat.ndim == 3:
+            batch, seq_len, dim = feat.shape
+            # Estimate a reasonable spatial shape (try to make it square-ish)
+            side = int(seq_len**0.5)
+            if side**2 == seq_len:  # Perfect square
+                h, w = side, side
+            else:
+                # Find factors of seq_len that are closest to a square
+                h, w = 1, seq_len
+                for i in range(2, int(seq_len**0.5) + 1):
+                    if seq_len % i == 0:
+                        h, w = i, seq_len // i
+                        # If we're getting closer to a square, update
+                        if abs(h - w) < abs(h - seq_len // h):
+                            h, w = i, seq_len // i
+                        else:
+                            break
+            
+            # Reshape to 4D for consistency across different types of features
+            self.extracted_features[name] = feat.reshape(batch, h, w, dim).permute(0, 3, 1, 2)
+            logger.debug(f"Reshaped feature '{name}' to 4D: {self.extracted_features[name].shape}")
     
     def to(self, *args, **kwargs):
         """Move the model to the specified device and dtype"""
