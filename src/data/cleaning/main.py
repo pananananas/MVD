@@ -52,7 +52,7 @@ FILTRATION_PROMPT_TEMPLATE = """I have multiple descriptions of the same object 
 
 {descriptions}
 
-Based on these descriptions determine if this data sample is useful. Useful samples have a lot of detail and contain rich textires. Useless samples are partially not visible, mostly white and abstract with no details, if on any view an object is not visible, it is useless, if the size of the object is very small, it is also useless.
+Based on these descriptions determine if this data sample is useful. Useful samples have a lot of detail and contain rich textires. Useless samples are partially not visible, mostly white and abstract with no details, if on any view an object is not visible, it is useless, if the size of the object is very small, it is also useless, if there is no one clear object, it is useless.
 Write `True` or `False` as an output.
 """
 
