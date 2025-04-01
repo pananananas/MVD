@@ -4,6 +4,10 @@ torch_dtype: float32
 use_memory_efficient_attention: true
 enable_gradient_checkpointing: true
 
+# Feature toggles for debugging
+use_camera_embeddings: false
+use_image_conditioning: false
+
 # Training parameters
 learning_rate: 0.00001
 epochs: 100

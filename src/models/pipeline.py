@@ -128,6 +128,8 @@ class MVDPipeline(StableDiffusionPipeline):
                 timestep=t,
                 encoder_hidden_states=prompt_embeds,
                 cross_attention_kwargs=cross_attention_kwargs,
+                use_camera_embeddings=getattr(self, 'use_camera_embeddings', True),
+                use_image_conditioning=getattr(self, 'use_image_conditioning', True),
                 **extra_kwargs
             ).sample
             

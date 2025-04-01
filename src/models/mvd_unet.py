@@ -210,6 +210,8 @@ class MultiViewUNet(nn.Module):
         timestep_cond: Optional[torch.FloatTensor] = None,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         added_cond_kwargs: Optional[Dict[str, torch.Tensor]] = None,
+        use_camera_embeddings: bool = True,
+        use_image_conditioning: bool = True,
     ):
 
         sample = sample.to(device=self.device, dtype=self.dtype)
@@ -221,17 +223,23 @@ class MultiViewUNet(nn.Module):
             repeat_factor = sample.shape[0] // encoder_hidden_states.shape[0]
             encoder_hidden_states = encoder_hidden_states.repeat(repeat_factor, 1, 1)
         
-        camera_embedding = self._process_camera(target_camera, sample.shape[0])
-        
-        # apply camera modulation for output channels (should be 4 for latent space)
-        if sample.shape[1] == 4:
-            sample = self.apply_modulation(sample, self.output_modulator, camera_embedding)
+        # Only process camera if enabled
+        camera_embedding = None
+        if use_camera_embeddings and target_camera is not None:
+            camera_embedding = self._process_camera(target_camera, sample.shape[0])
+            
+            # apply camera modulation for output channels (should be 4 for latent space)
+            if sample.shape[1] == 4 and camera_embedding is not None:
+                sample = self.apply_modulation(sample, self.output_modulator, camera_embedding)
+        else:
+            # Create dummy camera embedding if needed but won't be used
+            camera_embedding = torch.zeros(sample.shape[0], 1024, device=self.device, dtype=self.dtype)
         
         # Initialize reference hidden states dictionary
         ref_hidden_states = None
         
-        # process source image if provided
-        if source_image_latents is not None:
+        # process source image if provided and image conditioning is enabled
+        if use_image_conditioning and source_image_latents is not None:
             try:
                 # use timestep 0 (beginning of diffusion) for feature extraction
                 batch_size = source_image_latents.shape[0]
@@ -474,6 +482,8 @@ def create_mvd_pipeline(
     dtype: torch.dtype = torch.float16,
     use_memory_efficient_attention: bool = True,
     enable_gradient_checkpointing: bool = True,
+    use_camera_embeddings: bool = True,
+    use_image_conditioning: bool = True,
     cache_dir=None,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
@@ -495,5 +505,9 @@ def create_mvd_pipeline(
     )
     mv_unet = mv_unet.to(device=device, dtype=dtype)
     pipeline.unet = mv_unet
+    
+    # Store config parameters on the pipeline for use during inference
+    pipeline.use_camera_embeddings = use_camera_embeddings
+    pipeline.use_image_conditioning = use_image_conditioning
     
     return pipeline

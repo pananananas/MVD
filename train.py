@@ -45,6 +45,8 @@ def main(config):
         dtype=getattr(torch, config['torch_dtype']),
         use_memory_efficient_attention=config['use_memory_efficient_attention'],
         enable_gradient_checkpointing=config['enable_gradient_checkpointing'],
+        use_camera_embeddings=config.get('use_camera_embeddings', True),
+        use_image_conditioning=config.get('use_image_conditioning', True),
         # cache_dir=HUGGINGFACE_CACHE,
     )
 
