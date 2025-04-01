@@ -69,7 +69,6 @@ class MultiViewUNet(nn.Module):
         
         self.output_modulator = nn.Linear(1024, 4 * 2).to(device=self.device, dtype=self.dtype)
 
-        # Initialize attention processors for image cross-attention
         self._init_image_cross_attention()
 
 
@@ -80,7 +79,6 @@ class MultiViewUNet(nn.Module):
         """
         logger.info("Initializing image cross-attention processors")
         
-        # Dictionary to store attention layer mappings
         self.attention_layer_map = {}
         
         # Setup down blocks
@@ -169,10 +167,15 @@ class MultiViewUNet(nn.Module):
         if scale.shape[1] != hidden_states.shape[1]:
             raise ValueError(f"Channel dimension mismatch: scale has {scale.shape[1]} channels but hidden states has {hidden_states.shape[1]} channels")
         
-        # Instead of applying directly, use a more controlled approach
-        # Start with a small contribution that gradually increases
-        # During early training, this will mostly preserve the original hidden states
-        modulated = hidden_states * (0.9 + 0.1 * scale) + 0.1 * shift
+        # Get current training progress from global step if available
+        training_progress = getattr(self, 'current_step', 0) / max(getattr(self, 'total_steps', 10000), 1)
+        training_progress = min(max(training_progress, 0.0), 1.0)  # Clamp between 0 and 1
+        
+        # Start with minimal influence and gradually increase based on training progress
+        modulation_strength = 0.1 + 0.9 * training_progress  # Gradually increase from 0.1 to 1.0
+        
+        # Apply controlled modulation that increases in strength over time
+        modulated = hidden_states * (1.0 - modulation_strength + modulation_strength * scale) + modulation_strength * shift
         
         return modulated
 

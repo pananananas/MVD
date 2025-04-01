@@ -10,12 +10,18 @@ class PerceptualLoss:
         self.vgg = models.vgg16(weights=VGG16_Weights.IMAGENET1K_V1).features[:29].to(device).eval()
         # ImageNet normalization
         self.normalize = Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        self.device = device
         
         # Freeze VGG parameters
         for param in self.vgg.parameters():
             param.requires_grad = False
     
     def __call__(self, x, y):
+        # Ensure inputs and model are on the same device
+        current_device = x.device
+        if current_device != self.device:
+            self.to(current_device)
+            
         # Assuming x, y are in range [-1, 1], convert to [0, 1]
         x = (x + 1) / 2
         y = (y + 1) / 2
@@ -29,6 +35,12 @@ class PerceptualLoss:
         y_features = self.vgg(y)
         
         return F.mse_loss(x_features, y_features)
+    
+    def to(self, device):
+        """Move the model to the specified device"""
+        self.device = device
+        self.vgg = self.vgg.to(device)
+        return self
 
 
 def compute_geometric_consistency(generated, target):

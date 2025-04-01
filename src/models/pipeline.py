@@ -32,6 +32,7 @@ class MVDPipeline(StableDiffusionPipeline):
         source_camera: Optional[torch.Tensor] = None,
         target_camera: Optional[torch.Tensor] = None,
         source_images: Optional[torch.Tensor] = None,
+        ref_scale: float = 0.5,
     ):
         
         if prompt is not None and isinstance(prompt, str):
@@ -101,7 +102,6 @@ class MVDPipeline(StableDiffusionPipeline):
                 
                 source_image_latents = self.vae.encode(source_images).latent_dist.sample()
                 source_image_latents = source_image_latents * self.vae.config.scaling_factor
-                print(f"Encoded source image to latent space: {source_image_latents.shape}")
         
         self.scheduler.set_timesteps(num_inference_steps, device=self.device)
         timesteps = self.scheduler.timesteps
@@ -113,6 +113,10 @@ class MVDPipeline(StableDiffusionPipeline):
             extra_kwargs["target_camera"] = target_camera.to(self.device)
         if source_image_latents is not None:
             extra_kwargs["source_image_latents"] = source_image_latents
+        
+        # Include ref_scale in cross_attention_kwargs
+        cross_attention_kwargs = cross_attention_kwargs or {}
+        cross_attention_kwargs["ref_scale"] = ref_scale
         
         # Diffusion process
         for i, t in enumerate(self.progress_bar(timesteps)):
