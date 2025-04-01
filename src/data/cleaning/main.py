@@ -40,18 +40,20 @@ dataset_path = "/Users/ewojcik/Code/pwr/MVD/objaverse/renders"
 # ===== PROMPTS =====
 IMAGE_DESCRIPTION_PROMPT = "Describe this object in detail. Focus on materials, textures, colors, and shape."
 
-DISTILLATION_PROMPT_TEMPLATE = """I have multiple descriptions of the same 3D object from different angles:
+
+DISTILLATION_PROMPT_TEMPLATE = """I have multiple descriptions of the same object from different angles:
 
 {descriptions}
 
-Based on these descriptions, create detailed prompt that could be used to generate a 3D model of this object. Focus on materials, textures, colors, and shape. Make it 2 sentences max, so concise but detailed."""
+Based on these descriptions, create a prompt that could be used to generate images of this object. Write about materials, textures, colors, and shape. Description must be concise but detailed with 2 sentences."""
 
-FILTRATION_PROMPT_TEMPLATE = """I have multiple descriptions of the same 3D object from different angles:
+
+FILTRATION_PROMPT_TEMPLATE = """I have multiple descriptions of the same object from different angles:
 
 {descriptions}
 
-Based on these descriptions determine if this data sample is useful. Useful samples have a lot of detail and contain rich textires. Useless samples are partially not visible, mostly white. 
-Write `True` of `False` as an output.
+Based on these descriptions determine if this data sample is useful. Useful samples have a lot of detail and contain rich textires. Useless samples are partially not visible, mostly white and abstract with no details, if on any view an object is not visible, it is useless, if the size of the object is very small, it is also useless.
+Write `True` or `False` as an output.
 """
 
 
