@@ -133,6 +133,13 @@ class MVDLightningModule(LightningModule):
         alpha_t = alpha_t.view(-1, 1, 1, 1)
         denoised_latents = (noisy_latents - (1 - alpha_t).sqrt() * noise_pred) / alpha_t.sqrt()
         
+        # Add this clamping to prevent extreme values
+        with torch.no_grad():
+            # Check if values are extreme before clamping
+            if denoised_latents.abs().max().item() > 10.0:
+                logger.warning(f"Clamping extreme denoised latent values: {denoised_latents.abs().max().item():.4f}")
+                denoised_latents = torch.clamp(denoised_latents, -10.0, 10.0)
+        
         # Monitor denoised latents statistics
         with torch.no_grad():
             logger.info(f"Denoised latents stats: mean={denoised_latents.mean().item():.4f}, std={denoised_latents.std().item():.4f}, "

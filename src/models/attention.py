@@ -14,7 +14,7 @@ class ImageCrossAttentionProcessor(nn.Module):
         heads: int,
         dim_head: int = 64,
         dropout: float = 0.0,
-        scale: float = 0.1,
+        scale: float = 0.05,  # Reduced from 0.1 to 0.05 for safer initialization
     ):
         """
         Args:
@@ -60,7 +60,7 @@ class ImageCrossAttentionProcessor(nn.Module):
         attention_mask: Optional[torch.FloatTensor] = None,
         temb: Optional[torch.FloatTensor] = None,
         ref_hidden_states: Optional[Dict[str, torch.FloatTensor]] = None,
-        ref_scale: float = 0.1,  # Use the passed ref_scale
+        ref_scale: float = 0.1,
         *args,
         **kwargs
     ) -> torch.FloatTensor:
@@ -97,8 +97,21 @@ class ImageCrossAttentionProcessor(nn.Module):
         # Get the reference features for this specific layer
         reference_states = ref_hidden_states[self.name]
         
-        # Debug logging for dimension checking
-        logger.info(f"Layer: {self.name} | hidden_states: {hidden_states.shape} | reference: {reference_states.shape}")
+        # Apply aggressive feature normalization to prevent instability
+        with torch.no_grad():
+            ref_mean = reference_states.mean().item()
+            ref_std = reference_states.std().item()
+            
+            # Apply strong normalization to all reference features regardless of stats
+            # Center at 0 and normalize to std=0.5
+            reference_states = (reference_states - reference_states.mean(dim=(0, 1), keepdim=True)) 
+            ref_std_tensor = torch.clamp(reference_states.std(dim=(0, 1), keepdim=True), min=1e-5)
+            reference_states = reference_states / ref_std_tensor * 0.5
+            
+            # Log after normalization
+            new_mean = reference_states.mean().item()
+            new_std = reference_states.std().item()
+            logger.info(f"Layer: {self.name} | Before norm: mean={ref_mean:.4f}, std={ref_std:.4f} | After: mean={new_mean:.4f}, std={new_std:.4f}")
         
         # Handle different input dimensions
         input_ndim = hidden_states.ndim
@@ -179,9 +192,16 @@ class ImageCrossAttentionProcessor(nn.Module):
             
             logger.debug(f"Layer {self.name} - Original: mean={orig_mean:.4f}, std={orig_std:.4f} | " 
                          f"Reference: mean={ref_mean:.4f}, std={ref_std:.4f} | Scale: {ref_scale:.4f}")
+            
+            # Check if values are extremely large
+            if abs(ref_mean) > 1.0 or ref_std > 1.0:
+                logger.warning(f"Reference features have extreme values in {self.name}: mean={ref_mean:.4f}, std={ref_std:.4f}")
+                # Apply normalization to prevent extreme values
+                ref_hidden_states = ref_hidden_states / max(ref_std, 1.0)
 
-        # Use the passed ref_scale parameter directly rather than self.ref_scale
-        combined_output = original_output + ref_scale * ref_hidden_states
+        # Use a safer combination approach - clamp ref_scale to reasonable values
+        safe_ref_scale = min(max(ref_scale, 0.0), 0.5)
+        combined_output = original_output + safe_ref_scale * ref_hidden_states
         
         return combined_output
     
@@ -318,8 +338,8 @@ def get_attention_processor_for_module(name, attn_module):
         processor.original_processor = attn_module.processor
     else:
         # If no processor exists, create a default processor that just calls the attention module
-        def default_processor(attn, *args, **kwargs):
-            return attn(*args, **kwargs)
+        def default_processor(attn, hidden_states, *args, **kwargs):
+            return attn(hidden_states, *args, **kwargs)
         processor.original_processor = default_processor
     
     # Initialize the weights from the original attention module

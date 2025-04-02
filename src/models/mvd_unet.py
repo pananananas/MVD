@@ -172,10 +172,14 @@ class MultiViewUNet(nn.Module):
         training_progress = min(max(training_progress, 0.0), 1.0)  # Clamp between 0 and 1
         
         # Start with minimal influence and gradually increase based on training progress
-        modulation_strength = 0.1 + 0.9 * training_progress  # Gradually increase from 0.1 to 1.0
+        # Use a much gentler modulation strength with sigmoid curve
+        modulation_strength = 0.01 + 0.3 * torch.sigmoid(torch.tensor(10.0 * (training_progress - 0.5))).item()
+        
+        # Normalize scale closer to 1 to prevent extreme scaling
+        scale = 1.0 + torch.tanh(scale) * 0.2
         
         # Apply controlled modulation that increases in strength over time
-        modulated = hidden_states * (1.0 - modulation_strength + modulation_strength * scale) + modulation_strength * shift
+        modulated = hidden_states * ((1.0 - modulation_strength) + modulation_strength * scale) + modulation_strength * shift
         
         return modulated
 

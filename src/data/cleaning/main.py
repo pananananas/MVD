@@ -22,19 +22,20 @@ import io
 
 
 # ===== CONFIGURATION =====
-DATASET_PATH = "/Users/ewojcik/Code/pwr/MVD/objaverse/renders"
+# DATASET_PATH = "/Users/ewojcik/Code/pwr/MVD/objaverse/renders"
+DATASET_PATH = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/renders"
 IMG_SIZE = (512, 512)
 OUTPUT_DIR = "output_visualizations"
 NUM_OBJECTS = 300
 
-# torch.set_float32_matmul_precision('high')
-# SCRATCH = os.getenv('SCRATCH', '/net/tscratch/people/plgewoj')
-# HUGGINGFACE_CACHE = os.path.join(SCRATCH, 'huggingface_cache')
-# os.makedirs(HUGGINGFACE_CACHE, exist_ok=True)
-# os.environ['HF_HOME'] = HUGGINGFACE_CACHE
+torch.set_float32_matmul_precision('high')
+SCRATCH = os.getenv('SCRATCH', '/net/tscratch/people/plgewoj')
+HUGGINGFACE_CACHE = os.path.join(SCRATCH, 'huggingface_cache')
+os.makedirs(HUGGINGFACE_CACHE, exist_ok=True)
+os.environ['HF_HOME'] = HUGGINGFACE_CACHE
 
-# dataset_path = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/"
-dataset_path = "/Users/ewojcik/Code/pwr/MVD/objaverse/renders"
+dataset_path = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/renders"
+# dataset_path = "/Users/ewojcik/Code/pwr/MVD/objaverse/renders"
 
 
 # ===== PROMPTS =====
@@ -52,7 +53,7 @@ FILTRATION_PROMPT_TEMPLATE = """I have multiple descriptions of the same object 
 
 {descriptions}
 
-Based on these descriptions determine if this data sample is useful. Useful samples have a lot of detail and contain rich textires. Useless samples are partially not visible, mostly white and abstract with no details, if on any view an object is not visible, it is useless, if the size of the object is very small, it is also useless, if there is no one clear object, it is useless.
+Evaluate the provided descriptions to assess the usefulness of this data sample. A sample is considered useful if it is rich in detail and showcases vibrant textures. Conversely, a sample is deemed useless if it is partially obscured, predominantly white, or abstract with minimal detail. Additionally, if any view of the object is not visible, if the object appears very small, or if there is no clearly identifiable object, the sample should be classified as useless.
 Write `True` or `False` as an output.
 """
 
@@ -64,9 +65,9 @@ Write `True` or `False` as an output.
 model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
     "Qwen/Qwen2.5-VL-3B-Instruct",
     torch_dtype=torch.bfloat16,
-    attn_implementation="eager",  # "flash_attention_2",
+    # attn_implementation= "eager",  # "flash_attention_2",
     device_map="auto",
-    # cache_dir=HUGGINGFACE_CACHE,
+    cache_dir=HUGGINGFACE_CACHE,
 )
 
 min_pixels = 128*28*28
@@ -75,7 +76,7 @@ processor = AutoProcessor.from_pretrained(
     "Qwen/Qwen2.5-VL-3B-Instruct",
     min_pixels=min_pixels,
     max_pixels=max_pixels,
-    # cache_dir=HUGGINGFACE_CACHE,
+    cache_dir=HUGGINGFACE_CACHE,
 )
 
 # Configure matplotlib to handle CJK characters - use a font that supports them or fallback
