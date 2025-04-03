@@ -1,8 +1,3 @@
-# TODO:
-# - filter out objects without textures
-# - filter non-detailed objects
-
-
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
 from qwen_vl_utils import process_vision_info
 from typing import List, Dict, Any
@@ -14,6 +9,8 @@ import numpy as np
 import tempfile
 import textwrap
 import zipfile
+import sqlite3
+import shutil
 import random
 import torch
 import glob
@@ -24,6 +21,11 @@ import io
 # ===== CONFIGURATION =====
 # DATASET_PATH = "/Users/ewojcik/Code/pwr/MVD/objaverse/renders"
 DATASET_PATH = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/renders"
+FILTER_PATH = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/filtered_renders"
+os.makedirs(FILTER_PATH, exist_ok=True)
+
+DB_PATH = os.path.join(os.path.dirname(FILTER_PATH), "processing_status.db")
+
 IMG_SIZE = (512, 512)
 OUTPUT_DIR = "output_visualizations"
 NUM_OBJECTS = 300
@@ -34,20 +36,16 @@ HUGGINGFACE_CACHE = os.path.join(SCRATCH, 'huggingface_cache')
 os.makedirs(HUGGINGFACE_CACHE, exist_ok=True)
 os.environ['HF_HOME'] = HUGGINGFACE_CACHE
 
-dataset_path = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/renders"
-# dataset_path = "/Users/ewojcik/Code/pwr/MVD/objaverse/renders"
-
-
 # ===== PROMPTS =====
-IMAGE_DESCRIPTION_PROMPT = "Describe this object in detail. Focus on materials, textures, colors, and shape."
+IMAGE_DESCRIPTION_PROMPT = "Provide a comprehensive and vivid description of this object. Emphasize the materials used, intricate textures, colors, and the overall shape. If the object appears mostly white or lacks distinct features, indicate that it is not clearly visible. DO NOT WRITE THAT THE OBJECT IS ABSTRACT."
 
 
 DISTILLATION_PROMPT_TEMPLATE = """I have multiple descriptions of the same object from different angles:
 
 {descriptions}
 
-Based on these descriptions, create a prompt that could be used to generate images of this object. Write about materials, textures, colors, and shape. Description must be concise but detailed with 2 sentences."""
-
+Based on these descriptions, write a concrete prompt that could be used to generate images of this object. Write about colors, and shape. The description must be concise and strictly limited to 2 sentences.
+"""
 
 FILTRATION_PROMPT_TEMPLATE = """I have multiple descriptions of the same object from different angles:
 
@@ -57,11 +55,26 @@ Evaluate the provided descriptions to assess the usefulness of this data sample.
 Write `True` or `False` as an output.
 """
 
-
+# ===== DATABASE SETUP =====
+def setup_database():
+    """Setup SQLite database to track processing status."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS samples (
+        path TEXT PRIMARY KEY,
+        processed BOOLEAN,
+        is_useful BOOLEAN,
+        prompt TEXT,
+        error TEXT,
+        processed_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
+    conn.commit()
+    return conn
 
 # ===== SETUP =====
 
-# Initialize model and processor
 model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
     "Qwen/Qwen2.5-VL-3B-Instruct",
     torch_dtype=torch.bfloat16,
@@ -89,11 +102,11 @@ def wrap_text(text, width=50):
         return "No text available"
     return '\n'.join(textwrap.wrap(text, width))
 
-def get_zip_files(data_path: str, limit: int = NUM_OBJECTS) -> List[str]:
-    """Get a limited number of zip files from the dataset."""
+def get_zip_files(data_path: str, limit: int = None) -> List[str]:
+    """Get zip files from the dataset, optionally limited."""
     zip_files = sorted(glob.glob(os.path.join(data_path, "*.zip")))
     
-    if len(zip_files) > limit:
+    if limit and len(zip_files) > limit:
         random.seed(42)  # For reproducibility
         zip_files = random.sample(zip_files, limit)
     
@@ -297,117 +310,192 @@ def filter_sample(descriptions: List[str]) -> bool:
         # Default to True in case of error
         return True
 
-def visualize_object_views(object_data: Dict[str, Any], descriptions: List[str], distilled_prompt: str, is_useful: bool, save_path: str = None):
-    """Create a visualization of all views with descriptions and the distilled prompt."""
-    num_views = len(object_data['images'])
-    
-    cols = min(4, num_views)
-    rows = (num_views // cols) + (1 if num_views % cols != 0 else 0) + 1
-    
-    fig = plt.figure(figsize=(6 * cols, 6 * rows))
-    
-    # Add the filtration result at the top
-    fig.suptitle(f"Sample is {'USEFUL' if is_useful else 'NOT USEFUL'}", 
-                fontsize=14, 
-                color='green' if is_useful else 'red',
-                fontweight='bold')
-    
-    gs = fig.add_gridspec(rows, cols)
-    
-    # Plot each view with its description
-    for i, (img, desc) in enumerate(zip(object_data['images'], descriptions)):
-        row = i // cols
-        col = i % cols
-        ax = fig.add_subplot(gs[row, col])
-        ax.imshow(np.array(img))
+def add_prompt_to_zip(zip_path: str, prompt_text: str) -> bool:
+    """Add or update prompt.txt in a zip file while preserving the original structure."""
+    try:
+        # Create temporary directory for extraction
+        temp_dir = tempfile.mkdtemp()
         
-        # Wrap text to prevent overlap
-        wrapped_desc = wrap_text(desc, width=30)
-        title = f"View {i+1}\n{wrapped_desc[:200]}..."
-        ax.set_title(title, fontsize=9)
-        ax.axis('off')
-    
-    # Add distilled prompt at the bottom, spanning all columns
-    prompt_text = f"Distilled Prompt:\n{wrap_text(distilled_prompt, width=80)}"
-    ax = fig.add_subplot(gs[rows-1, :])
-    
-    # Use text instead of title for better control over wrapping
-    ax.text(0.5, 0.5, prompt_text, 
-            ha='center', va='center', 
-            fontsize=10, 
-            wrap=True,
-            transform=ax.transAxes,
-            bbox=dict(facecolor='white', alpha=0.8, boxstyle='round,pad=0.5'))
-    ax.axis('off')
-    
-    plt.tight_layout()
-    
-    if save_path:
-        # Use a different approach to save with font fallback
-        plt.savefig(save_path, dpi=100, bbox_inches='tight')
-    
-    plt.close()
+        # Extract all contents
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(temp_dir)
+        
+        # Find the root directory within the extracted contents
+        extracted_dirs = [d for d in os.listdir(temp_dir) if os.path.isdir(os.path.join(temp_dir, d))]
+        if extracted_dirs:
+            # If there's a subdirectory (which contains all the files), add prompt.txt there
+            content_dir = os.path.join(temp_dir, extracted_dirs[0])
+            with open(os.path.join(content_dir, 'prompt.txt'), 'w') as f:
+                f.write(prompt_text)
+        else:
+            # If files are already at root level, add prompt.txt there
+            with open(os.path.join(temp_dir, 'prompt.txt'), 'w') as f:
+                f.write(prompt_text)
+        
+        # Create a new zip file with the updated contents
+        temp_zip = os.path.join(temp_dir, "temp.zip")
+        with zipfile.ZipFile(temp_zip, 'w') as new_zip:
+            # Walk through the temp directory and add all files
+            for root, _, files in os.walk(temp_dir):
+                for file in files:
+                    # Skip the temp zip itself
+                    if file == "temp.zip":
+                        continue
+                    
+                    file_path = os.path.join(root, file)
+                    # Calculate arcname (path within the zip) to maintain the structure
+                    arcname = os.path.relpath(file_path, temp_dir)
+                    new_zip.write(file_path, arcname)
+        
+        # Replace the original zip
+        shutil.move(temp_zip, zip_path)
+        
+        # Clean up temp directory
+        shutil.rmtree(temp_dir)
+        return True
+        
+    except Exception as e:
+        print(f"Error adding prompt to zip {zip_path}: {e}")
+        if 'temp_dir' in locals() and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+        return False
 
-def main():    
+
+def main():
+    conn = setup_database()
+    cursor = conn.cursor()
+    
+    # Get all zip files in the dataset
     zip_files = get_zip_files(DATASET_PATH, limit=NUM_OBJECTS)
+    
+    # Create output directory for visualizations
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
-    for i, zip_path in enumerate(tqdm(zip_files, desc="Processing objects")):
-
-        object_data = load_images_from_zip(zip_path)
-        
-        if len(object_data['images']) == 0:
-            continue
-        
-        descriptions = []
-        valid_descriptions = []
-        valid_images = []
-        
-        for j, img in enumerate(tqdm(object_data['images'], desc=f"Generating descriptions", leave=False)):
-            if img.mode != 'RGB':
-                img = img.convert('RGB')
-            
-            desc = generate_description(img)
-            descriptions.append(desc)
-            
-            if desc != "Error generating description":
-                valid_descriptions.append(desc)
-                valid_images.append(img)
-            
-            desc_preview = desc[:50] + "..." if len(desc) > 50 else desc
-        
-        if not valid_descriptions:
-            output_path = os.path.join(OUTPUT_DIR, f"{object_data['object_uid']}_error.png")
-            plt.figure(figsize=(10, 6))
-            plt.text(0.5, 0.5, "Failed to generate any valid descriptions for this object", 
-                        ha='center', va='center', fontsize=14)
-            plt.axis('off')
-            plt.tight_layout()
-            plt.savefig(output_path, dpi=100, bbox_inches='tight')
-            plt.close()
-            continue
-        
-        distilled_prompt = distill_descriptions(valid_descriptions, object_data['prompt'])
-        
-        # Run filtration to determine if the sample is useful
-        is_useful = filter_sample(valid_descriptions)
-        
-        output_path = os.path.join(OUTPUT_DIR, f"{object_data['object_uid']}_analysis.png")
-        
-        if len(valid_descriptions) < len(descriptions):
-            valid_object_data = {
-                'object_uid': object_data['object_uid'],
-                'images': valid_images,
-                'image_paths': [object_data['image_paths'][i] for i, desc in enumerate(descriptions) 
-                                if desc != "Error generating description"],
-                'prompt': object_data['prompt']
-            }
-            visualize_object_views(valid_object_data, valid_descriptions, distilled_prompt, is_useful, output_path)
-        else:
-            visualize_object_views(object_data, descriptions, distilled_prompt, is_useful, output_path)
-        
-
+    # Pre-populate database with unprocessed files if they're not already there
+    for zip_path in zip_files:
+        cursor.execute("INSERT OR IGNORE INTO samples (path, processed) VALUES (?, ?)", 
+                      (zip_path, False))
+    conn.commit()
     
+    # Get unprocessed files
+    cursor.execute("SELECT path FROM samples WHERE processed = 0")
+    unprocessed = [row[0] for row in cursor.fetchall()]
+    
+    print(f"Found {len(unprocessed)} unprocessed samples out of {len(zip_files)} total")
+    
+    # Process unprocessed files
+    for zip_path in tqdm(unprocessed, desc="Processing objects"):
+        try:
+            # Skip if the file doesn't exist anymore
+            if not os.path.exists(zip_path):
+                cursor.execute(
+                    "UPDATE samples SET processed = 1, error = ? WHERE path = ?",
+                    ("File not found", zip_path)
+                )
+                conn.commit()
+                continue
+                
+            object_data = load_images_from_zip(zip_path)
+            
+            if len(object_data['images']) == 0:
+                cursor.execute(
+                    "UPDATE samples SET processed = 1, error = ? WHERE path = ?",
+                    ("No images found", zip_path)
+                )
+                conn.commit()
+                continue
+            
+            descriptions = []
+            valid_descriptions = []
+            valid_images = []
+            
+            for img in tqdm(object_data['images'], desc="Generating descriptions", leave=False):
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                
+                desc = generate_description(img)
+                descriptions.append(desc)
+                
+                if desc != "Error generating description":
+                    valid_descriptions.append(desc)
+                    valid_images.append(img)
+            
+            if not valid_descriptions:
+                # Save error visualization
+                output_path = os.path.join(OUTPUT_DIR, f"{object_data['object_uid']}_error.png")
+                plt.figure(figsize=(10, 6))
+                plt.text(0.5, 0.5, "Failed to generate any valid descriptions for this object", 
+                         ha='center', va='center', fontsize=14)
+                plt.axis('off')
+                plt.tight_layout()
+                plt.savefig(output_path, dpi=100, bbox_inches='tight')
+                plt.close()
+                
+                cursor.execute(
+                    "UPDATE samples SET processed = 1, error = ? WHERE path = ?",
+                    ("No valid descriptions generated", zip_path)
+                )
+                conn.commit()
+                continue
+            
+            # Generate distilled prompt
+            distilled_prompt = distill_descriptions(valid_descriptions, object_data['prompt'])
+            
+            # Filter the sample
+            is_useful = filter_sample(valid_descriptions)
+            
+            # Save visualization
+            output_path = os.path.join(OUTPUT_DIR, f"{object_data['object_uid']}_analysis.png")
+            
+            if len(valid_descriptions) < len(descriptions):
+                valid_object_data = {
+                    'object_uid': object_data['object_uid'],
+                    'images': valid_images,
+                    'image_paths': [object_data['image_paths'][i] for i, desc in enumerate(descriptions) 
+                                   if desc != "Error generating description"],
+                    'prompt': object_data['prompt']
+                }
+            
+            if is_useful:
+                add_prompt_to_zip(zip_path, distilled_prompt)
+            else:
+                filtered_path = os.path.join(FILTER_PATH, os.path.basename(zip_path))
+                os.makedirs(os.path.dirname(filtered_path), exist_ok=True)
+                
+                shutil.copy2(zip_path, filtered_path)
+                
+                if os.path.exists(filtered_path):
+                    os.remove(zip_path)
+            
+            cursor.execute(
+                "UPDATE samples SET processed = 1, is_useful = ?, prompt = ? WHERE path = ?",
+                (is_useful, distilled_prompt, zip_path)
+            )
+            conn.commit()
+            
+        except Exception as e:
+            print(f"Error processing {zip_path}: {e}")
+            cursor.execute(
+                "UPDATE samples SET processed = 1, error = ? WHERE path = ?",
+                (str(e), zip_path)
+            )
+            conn.commit()
+    
+    cursor.execute("SELECT COUNT(*) FROM samples WHERE processed = 1 AND is_useful = 1")
+    useful_count = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT COUNT(*) FROM samples WHERE processed = 1 AND is_useful = 0")
+    not_useful_count = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT COUNT(*) FROM samples WHERE processed = 1 AND error IS NOT NULL")
+    error_count = cursor.fetchone()[0]
+    
+    print(f"Processing complete. Summary:")
+    print(f"  - Useful samples: {useful_count}")
+    print(f"  - Non-useful samples: {not_useful_count}")
+    print(f"  - Errors: {error_count}")
+    
+    conn.close()
 
 if __name__ == "__main__":
     main()

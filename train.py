@@ -13,15 +13,15 @@ import yaml
 import os
 
 
-# torch.set_float32_matmul_precision('high')
-# SCRATCH = os.getenv('SCRATCH', '/net/tscratch/people/plgewoj')
-# HUGGINGFACE_CACHE = os.path.join(SCRATCH, 'huggingface_cache')
-# os.makedirs(HUGGINGFACE_CACHE, exist_ok=True)
-# os.environ['HF_HOME'] = HUGGINGFACE_CACHE
+torch.set_float32_matmul_precision('high')
+SCRATCH = os.getenv('SCRATCH', '/net/tscratch/people/plgewoj')
+HUGGINGFACE_CACHE = os.path.join(SCRATCH, 'huggingface_cache')
+os.makedirs(HUGGINGFACE_CACHE, exist_ok=True)
+os.environ['HF_HOME'] = HUGGINGFACE_CACHE
 
 
-dataset_path = "/Users/ewojcik/Code/pwr/MVD/objaverse"
-# dataset_path = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/"
+# dataset_path = "/Users/ewojcik/Code/pwr/MVD/objaverse"
+dataset_path = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/"
 
 def main(config):
 
@@ -47,7 +47,7 @@ def main(config):
         enable_gradient_checkpointing=config['enable_gradient_checkpointing'],
         use_camera_embeddings=config.get('use_camera_embeddings', True),
         use_image_conditioning=config.get('use_image_conditioning', True),
-        # cache_dir=HUGGINGFACE_CACHE,
+        cache_dir=HUGGINGFACE_CACHE,
     )
 
     dirs = create_output_dirs("outputs")

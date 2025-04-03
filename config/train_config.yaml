@@ -5,8 +5,8 @@ use_memory_efficient_attention: true
 enable_gradient_checkpointing: true
 
 # Feature toggles for debugging
-use_camera_embeddings: false
-use_image_conditioning: false
+use_camera_embeddings: true
+use_image_conditioning: true
 
 # Training parameters
 learning_rate: 0.00001
@@ -24,8 +24,8 @@ dataset: Objaverse
 image_size:
 - 512
 - 512
-max_views_per_object: 8
-max_samples: 100       # Set to null for full dataset
+max_views_per_object: 12
+max_samples: null       # Set to null for full dataset
 num_gpus: 1
 
 # Loss weights

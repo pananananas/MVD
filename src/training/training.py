@@ -288,11 +288,18 @@ class MVDLightningModule(LightningModule):
                     target_img.save(save_dir / f'batch_{batch_idx}_sample_{i}_target.png')
                     generated_img.save(save_dir / f'batch_{batch_idx}_sample_{i}_generated.png')
                 
-                wandb.log({
-                    f"samples/epoch_{epoch}_batch_{batch_idx}": [
-                        wandb.Image(img) for img in images[:4]
-                    ]
-                })
+                if batch_idx % 20 == 0:
+                    wandb_images = []
+                    for i in range(min(4, len(images))):
+                        wandb_images.extend([
+                            wandb.Image(source_img, caption=f"Source {i}"),
+                            wandb.Image(target_img, caption=f"Target {i}"),
+                            wandb.Image(generated_img, caption=f"Generated {i}")
+                        ])
+                    wandb.log({
+                        f"samples/epoch_{epoch}_batch_{batch_idx}": wandb_images
+                    })
+
             except Exception as e:
                 logger.error(f"Error in sample generation: {str(e)}")
                 print(f"Prompt: {batch['prompt']}")
