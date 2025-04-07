@@ -1,8 +1,6 @@
 from .losses import PerceptualLoss, compute_losses
 from pytorch_lightning import LightningModule
-from src.utils import create_output_dirs
 from pytorch_msssim import SSIM
-from pathlib import Path
 from PIL import Image
 import numpy as np
 import logging
@@ -29,13 +27,12 @@ class MVDLightningModule(LightningModule):
         self.scheduler = pipeline.scheduler
         self.pipeline = pipeline
         
-        # Freeze base UNet parameters
+        # freeze base UNet
         for name, param in self.unet.named_parameters():
-            # Only train the added multi-view components
             if not any(x in name for x in ['camera_encoder', 'down_modulators', 'up_modulators', 'mid_modulator']):
                 param.requires_grad = False
         
-        # Freeze VAE and text encoder
+        # freeze VAE
         self.vae.requires_grad_(False)
         self.text_encoder.requires_grad_(False)
         self.vae.eval()
@@ -54,7 +51,6 @@ class MVDLightningModule(LightningModule):
         self.comparison_dir = self.dirs['comparisons']
         self.comparison_dir.mkdir(exist_ok=True, parents=True)
         
-        # Initialize both loss functions properly
         self.ssim = SSIM(data_range=2.0, size_average=True)  # range [-1,1]
         self.perceptual_loss = PerceptualLoss(device="cpu")  # Will move to correct device later
         
@@ -228,7 +224,6 @@ class MVDLightningModule(LightningModule):
             },
         }
     
-# Visualization functions for debugging:
 
     def _save_generated_samples(self, batch, batch_idx, epoch):
         """
@@ -259,13 +254,15 @@ class MVDLightningModule(LightningModule):
                     num_inference_steps=20,
                     source_camera=source_camera,
                     target_camera=target_camera,
-                    source_images=source_images,  # Pass source images for conditioning
+                    source_images=source_images,
                     num_images_per_prompt=1,
                     output_type="np"
                 )["images"]
                 
                 save_dir = self.dirs['samples'] / f"epoch_{epoch}"
                 save_dir.mkdir(exist_ok=True)
+                
+                logger.info(f"Processing batch {batch_idx} in epoch {epoch}")
                 
                 for i, (source, target, generated) in enumerate(zip(
                     batch['source_image'],
@@ -288,17 +285,16 @@ class MVDLightningModule(LightningModule):
                     target_img.save(save_dir / f'batch_{batch_idx}_sample_{i}_target.png')
                     generated_img.save(save_dir / f'batch_{batch_idx}_sample_{i}_generated.png')
                 
-                if batch_idx % 20 == 0:
-                    wandb_images = []
-                    for i in range(min(4, len(images))):
-                        wandb_images.extend([
-                            wandb.Image(source_img, caption=f"Source {i}"),
-                            wandb.Image(target_img, caption=f"Target {i}"),
-                            wandb.Image(generated_img, caption=f"Generated {i}")
-                        ])
-                    wandb.log({
-                        f"samples/epoch_{epoch}_batch_{batch_idx}": wandb_images
-                    })
+                    
+                    if batch_idx % 50 == 0:
+                        logger.info(f"Logging WandB images for batch {batch_idx}, sample {i}")
+                        wandb.log({
+                            f"samples/epoch_{epoch}_batch_{batch_idx}": [
+                                wandb.Image(source_img, caption=f"Source {i}"),
+                                wandb.Image(target_img, caption=f"Target {i}"),
+                                wandb.Image(generated_img, caption=f"Generated {i}")
+                            ]
+                        })
 
             except Exception as e:
                 logger.error(f"Error in sample generation: {str(e)}")

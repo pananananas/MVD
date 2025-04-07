@@ -9,10 +9,10 @@ use_camera_embeddings: true
 use_image_conditioning: true
 
 # Training parameters
-learning_rate: 0.00001
+learning_rate: 0.000001
 epochs: 100
-batch_size: 1
-val_check_interval: 0.5  # Check every 0.5 epochs
+batch_size: 3
+val_check_interval: 0.5  # Check every x epochs
 gradient_accumulation_steps: 4
 max_grad_norm: 1.0
 early_stopping_patience: 20
@@ -25,7 +25,7 @@ image_size:
 - 512
 - 512
 max_views_per_object: 12
-max_samples: null       # Set to null for full dataset
+max_samples: 10000       # null for full dataset
 num_gpus: 1
 
 # Loss weights

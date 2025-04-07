@@ -161,14 +161,7 @@ class ImageCrossAttentionProcessor(nn.Module):
                 dropout_p=0.0, 
                 is_causal=False
             )
-        else:
-            # Fallback for older PyTorch versions
-            scale = 1 / (self.dim_head ** 0.5)
-            attention_scores = torch.matmul(query, key.transpose(-1, -2)) * scale
-            attention_probs = F.softmax(attention_scores, dim=-1)
-            ref_attention_output = torch.matmul(attention_probs, value)
-        
-        # Reshape back
+
         ref_attention_output = ref_attention_output.transpose(1, 2).reshape(
             batch_size, -1, self.heads * self.dim_head
         )
@@ -193,8 +186,7 @@ class ImageCrossAttentionProcessor(nn.Module):
             logger.debug(f"Layer {self.name} - Original: mean={orig_mean:.4f}, std={orig_std:.4f} | " 
                          f"Reference: mean={ref_mean:.4f}, std={ref_std:.4f} | Scale: {ref_scale:.4f}")
             
-            # Check if values are extremely large
-            if abs(ref_mean) > 1.0 or ref_std > 1.0:
+            if abs(ref_mean) > 0.5 or ref_std > 1.5:
                 logger.warning(f"Reference features have extreme values in {self.name}: mean={ref_mean:.4f}, std={ref_std:.4f}")
                 # Apply normalization to prevent extreme values
                 ref_hidden_states = ref_hidden_states / max(ref_std, 1.0)
