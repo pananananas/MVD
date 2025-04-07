@@ -69,22 +69,22 @@ def main(config):
         LearningRateMonitor(logging_interval='step'),
     ]
     
-    # Convert torch_dtype to proper Lightning precision format
     precision_value = "32" if config['torch_dtype'] == 'float32' else "16"
     print(f"Using PyTorch Lightning precision: {precision_value}")
     
     trainer = Trainer(
         accelerator="auto",
         devices=config['num_gpus'],
+        strategy="ddp",
         max_epochs=config['epochs'],
         logger=wandb_logger,
         callbacks=callbacks,
         gradient_clip_val=config['max_grad_norm'],
         accumulate_grad_batches=config['gradient_accumulation_steps'],
         val_check_interval=config['val_check_interval'],
-        log_every_n_steps=1,  # Log every step for better monitoring
-        deterministic=False,  # For better performance
-        precision=precision_value,  # Use the proper precision format for Lightning
+        log_every_n_steps=1,
+        deterministic=False,
+        precision=precision_value,
     )
     
     trainer.fit(model, data_module)

@@ -9,11 +9,11 @@ use_camera_embeddings: true
 use_image_conditioning: true
 
 # Training parameters
-learning_rate: 0.000001
+learning_rate: 0.00001
 epochs: 100
-batch_size: 3
+batch_size: 2
 val_check_interval: 0.5  # Check every x epochs
-gradient_accumulation_steps: 4
+gradient_accumulation_steps: 20
 max_grad_norm: 1.0
 early_stopping_patience: 20
 max_checkpoints: 5
@@ -24,7 +24,7 @@ dataset: Objaverse
 image_size:
 - 512
 - 512
-max_views_per_object: 12
+max_views_per_object: 8
 max_samples: 10000       # null for full dataset
 num_gpus: 1
 
