@@ -184,6 +184,19 @@ class MultiViewUNet(nn.Module):
         use_camera_embeddings: bool = True,
         use_image_conditioning: bool = True,
     ):
+        logger.info(f"UNet input - sample shape: {sample.shape}")
+        logger.info(f"UNet input - encoder_hidden_states shape: {encoder_hidden_states.shape}")
+        
+        source_camera = source_camera or {}
+        target_camera = target_camera or {}
+        source_image_latents = source_image_latents or []
+        
+        if source_camera:
+            logger.info(f"UNet input - source_camera shape: {source_camera.shape}")
+        if target_camera:
+            logger.info(f"UNet input - target_camera shape: {target_camera.shape}")
+        if source_image_latents:
+            logger.info(f"UNet input - source_image_latents shape: {source_image_latents.shape}")
 
         sample = sample.to(device=self.device, dtype=self.dtype)
         timestep = timestep.to(device=self.device)
@@ -195,7 +208,7 @@ class MultiViewUNet(nn.Module):
             encoder_hidden_states = encoder_hidden_states.repeat(repeat_factor, 1, 1)
         
         camera_embedding = None
-        if use_camera_embeddings and target_camera is not None:
+        if use_camera_embeddings and target_camera:
             camera_embedding = self._process_camera(source_camera, target_camera, sample.shape[0])
             sample = self.apply_shift_scale_modulation(sample, self.output_modulator, camera_embedding)
         else:
@@ -205,7 +218,7 @@ class MultiViewUNet(nn.Module):
         ref_hidden_states = None
         
         # process source image if provided and image conditioning is enabled
-        if use_image_conditioning and source_image_latents is not None:
+        if use_image_conditioning and source_image_latents:
             try:
                 # use timestep 0 (beginning of diffusion) for feature extraction
                 batch_size = source_image_latents.shape[0]

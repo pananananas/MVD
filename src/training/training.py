@@ -51,7 +51,7 @@ class MVDLightningModule(LightningModule):
         self.comparison_dir.mkdir(exist_ok=True, parents=True)
         
         self.ssim = SSIM(data_range=2.0, size_average=True)  # range [-1,1]
-        self.perceptual_loss = PerceptualLoss(device="cpu")  # will move to correct device later
+        self.perceptual_loss = PerceptualLoss(device="cpu")
         
         self.training_step_outputs = []
         self.validation_step_outputs = []
@@ -233,6 +233,15 @@ class MVDLightningModule(LightningModule):
             target_camera = batch.get('target_camera', None)
             source_images = batch.get('source_image', None)
             
+            # Add detailed logging
+            logger.info(f"Sample generation - prompt: {batch['prompt']}")
+            if source_camera is not None:
+                logger.info(f"Source camera shape: {source_camera.shape}")
+            if target_camera is not None:
+                logger.info(f"Target camera shape: {target_camera.shape}")
+            if source_images is not None:
+                logger.info(f"Source images shape: {source_images.shape}")
+            
             if target_camera is not None and hasattr(target_camera, 'to'):
                 target_camera = target_camera.to(self.device)
             
@@ -294,8 +303,8 @@ class MVDLightningModule(LightningModule):
                 logger.error(f"Error in sample generation: {str(e)}")
                 print(f"Prompt: {batch['prompt']}")
                 if source_camera is not None:
-                    print(f"Source camera type: {type(source_camera)}")
+                    print(f"Source camera type: {type(source_camera)}, shape: {source_camera.shape}")
                 if target_camera is not None:
-                    print(f"Target camera type: {type(target_camera)}")
+                    print(f"Target camera type: {type(target_camera)}, shape: {target_camera.shape}")
                 if source_images is not None:
-                    print(f"Source images shape: {source_images.shape}") 
+                    print(f"Source images type: {type(source_images)}, shape: {source_images.shape}") 

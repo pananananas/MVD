@@ -184,6 +184,10 @@ class ObjaverseDataset(Dataset):
         source_cam_tensor = torch.from_numpy(source_cam).float()
         target_cam_tensor = torch.from_numpy(target_cam).float()
         
+        # Add shape validation before returning
+        logger.debug(f"Sample {idx} - source_image: {source_img_tensor.shape}, target_image: {target_img_tensor.shape}")
+        logger.debug(f"Sample {idx} - source_camera: {source_cam_tensor.shape}, target_camera: {target_cam_tensor.shape}")
+        
         return {
             'object_uid': object_uid,
             'prompt': pair_info['prompt'],
