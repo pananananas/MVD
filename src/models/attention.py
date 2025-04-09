@@ -14,17 +14,8 @@ class ImageCrossAttentionProcessor(nn.Module):
         heads: int,
         dim_head: int = 64,
         dropout: float = 0.0,
-        scale: float = 0.05,  # Reduced from 0.1 to 0.05 for safer initialization
+        scale: float = 0.05,
     ):
-        """
-        Args:
-            name: Unique identifier for this processor (for feature mapping)
-            query_dim: Dimension of the query vectors
-            heads: Number of attention heads
-            dim_head: Dimension of each attention head
-            dropout: Dropout probability
-            scale: Initial scale factor for image cross-attention contribution
-        """
         super().__init__()
 
         self.name = name
@@ -33,15 +24,13 @@ class ImageCrossAttentionProcessor(nn.Module):
         self.inner_dim = heads * dim_head
         self.query_dim = query_dim
         
-        # Store original processor
         self.original_processor = None
         
-        # Image cross-attention projections
+        # image cross-attention projections
         self.to_q_ref = nn.Linear(query_dim, self.inner_dim, bias=False)
         self.to_k_ref = nn.Linear(query_dim, self.inner_dim, bias=False)
         self.to_v_ref = nn.Linear(query_dim, self.inner_dim, bias=False)
         
-        # Feature dimension adapter - will be initialized if needed
         self.feature_adapter = None
         
         self.to_out_ref = nn.ModuleList([
@@ -49,7 +38,6 @@ class ImageCrossAttentionProcessor(nn.Module):
             nn.Dropout(dropout)
         ])
         
-        # Learnable scale parameter to control the contribution of image cross-attention
         self.ref_scale = nn.Parameter(torch.tensor(scale))
     
     def __call__(
@@ -64,22 +52,7 @@ class ImageCrossAttentionProcessor(nn.Module):
         *args,
         **kwargs
     ) -> torch.FloatTensor:
-        """
-        Process attention with additional image cross-attention.
-        
-        Args:
-            attn: Attention module
-            hidden_states: Input hidden states
-            encoder_hidden_states: Text encoder hidden states (for regular cross-attention)
-            attention_mask: Attention mask
-            temb: Time embedding (not used here)
-            ref_hidden_states: Dictionary mapping layer names to reference image features
-            ref_scale: Scale factor for reference features contribution
-            
-        Returns:
-            Combined attention output from both original and image cross-attention paths
-        """
-        # First run the original attention (without modifying it)
+
         original_output = self.original_processor(
             attn, 
             hidden_states, 

@@ -67,13 +67,6 @@ class MVDLightningModule(LightningModule):
         target_latents = self.vae.encode(target_images).latent_dist.sample()
         target_latents = target_latents * self.vae.config.scaling_factor
         
-        # Monitor latent statistics
-        with torch.no_grad():
-            logger.info(f"Source latents stats: mean={source_latents.mean().item():.4f}, std={source_latents.std().item():.4f}, "
-                        f"min={source_latents.min().item():.4f}, max={source_latents.max().item():.4f}")
-            logger.info(f"Target latents stats: mean={target_latents.mean().item():.4f}, std={target_latents.std().item():.4f}, "
-                        f"min={target_latents.min().item():.4f}, max={target_latents.max().item():.4f}")
-        
         prompts = batch['prompt']
         
         source_camera = batch.get('source_camera', None)
@@ -103,12 +96,6 @@ class MVDLightningModule(LightningModule):
         )
         noisy_latents = self.scheduler.add_noise(source_latents, noise, timesteps)
         
-        with torch.no_grad():
-            logger.info(f"Noisy latents stats: mean={noisy_latents.mean().item():.4f}, std={noisy_latents.std().item():.4f}, "
-                        f"min={noisy_latents.min().item():.4f}, max={noisy_latents.max().item():.4f}")
-            logger.info(f"Noise stats: mean={noise.mean().item():.4f}, std={noise.std().item():.4f}")
-            logger.info(f"Timesteps: {timesteps[:5].tolist()}")
-        
         noise_pred = self.unet(
             sample=noisy_latents,
             timestep=timesteps,
@@ -118,26 +105,16 @@ class MVDLightningModule(LightningModule):
             source_image_latents=source_latents,
         ).sample
         
-        with torch.no_grad():
-            logger.info(f"Noise prediction stats: mean={noise_pred.mean().item():.4f}, std={noise_pred.std().item():.4f}, "
-                       f"min={noise_pred.min().item():.4f}, max={noise_pred.max().item():.4f}")
-        
         alpha_t = self.scheduler.alphas_cumprod[timesteps]
         alpha_t = alpha_t.view(-1, 1, 1, 1)
         denoised_latents = (noisy_latents - (1 - alpha_t).sqrt() * noise_pred) / alpha_t.sqrt()
         
-        # Add this clamping to prevent extreme values
+        # clamping to prevent extreme values in VAE
         with torch.no_grad():
-            # Check if values are extreme before clamping
             if denoised_latents.abs().max().item() > 10.0:
                 logger.warning(f"Clamping extreme denoised latent values: {denoised_latents.abs().max().item():.4f}")
                 denoised_latents = torch.clamp(denoised_latents, -10.0, 10.0)
         
-        with torch.no_grad():
-            logger.info(f"Denoised latents stats: mean={denoised_latents.mean().item():.4f}, std={denoised_latents.std().item():.4f}, "
-                       f"min={denoised_latents.min().item():.4f}, max={denoised_latents.max().item():.4f}")
-            
-            # Check if denoised latents are within expected range for the VAE
             if denoised_latents.abs().max().item() > 10:
                 logger.warning(f"WARNING: Denoised latents have extreme values: max abs = {denoised_latents.abs().max().item():.4f}")
         
@@ -259,6 +236,7 @@ class MVDLightningModule(LightningModule):
                     target_camera=target_camera,
                     source_images=source_images,
                     num_images_per_prompt=1,
+                    guidance_scale = 1.0,
                     output_type="np"
                 )["images"]
                 

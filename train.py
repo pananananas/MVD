@@ -13,17 +13,16 @@ import yaml
 import os
 
 
-torch.set_float32_matmul_precision('high')
-SCRATCH = os.getenv('SCRATCH', '/net/tscratch/people/plgewoj')
-HUGGINGFACE_CACHE = os.path.join(SCRATCH, 'huggingface_cache')
-os.makedirs(HUGGINGFACE_CACHE, exist_ok=True)
-os.environ['HF_HOME'] = HUGGINGFACE_CACHE
-
-
-# dataset_path = "/Users/ewojcik/Code/pwr/MVD/objaverse"
-dataset_path = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/"
-
-def main(config):
+def main(config, cuda):
+    if cuda:
+        torch.set_float32_matmul_precision('high')
+        SCRATCH = os.getenv('SCRATCH', '/net/tscratch/people/plgewoj')
+        HUGGINGFACE_CACHE = os.path.join(SCRATCH, 'huggingface_cache')
+        os.makedirs(HUGGINGFACE_CACHE, exist_ok=True)
+        os.environ['HF_HOME'] = HUGGINGFACE_CACHE
+        dataset_path = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/"
+    else:
+        dataset_path = "/Users/ewojcik/Code/pwr/MVD/objaverse"
 
     wandb_logger = WandbLogger(
         project="mvd",
@@ -47,7 +46,7 @@ def main(config):
         enable_gradient_checkpointing=config['enable_gradient_checkpointing'],
         use_camera_embeddings=config.get('use_camera_embeddings', True),
         use_image_conditioning=config.get('use_image_conditioning', True),
-        cache_dir=HUGGINGFACE_CACHE,
+        cache_dir=HUGGINGFACE_CACHE if cuda else None,
     )
 
     dirs = create_output_dirs("outputs")
@@ -111,6 +110,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description="MVD Training Script")
     parser.add_argument('--config', type=str, default='config/train_config.yaml', help='Path to configuration file')
+    parser.add_argument('--cuda', action='store_true', help='Use CUDA')
     args = parser.parse_args()
     config = load_config(args.config)
     
@@ -124,4 +124,4 @@ if __name__ == '__main__':
     else:
         config['num_workers'] = 1
 
-    main(config)
+    main(config, args.cuda)

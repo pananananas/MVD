@@ -1,11 +1,14 @@
-import torch
-import numpy as np
-import torch.nn as nn
 import torch.nn.functional as F
+import torch.nn as nn
+import numpy as np
+import logging
+import torch
 from typing import Dict
 
+logger = logging.getLogger(__name__)
+
 class CameraEncoder(nn.Module):
-    def __init__(self, output_dim: int = 768, max_freq: int = 10):
+    def __init__(self, output_dim: int = 768, max_freq: int = 10, modulation_hidden_dims: Dict[str, int] = None):
         super().__init__()
         self.output_dim = output_dim
         self.max_freq = max_freq
@@ -13,7 +16,7 @@ class CameraEncoder(nn.Module):
         self.pos_enc_dim = (output_dim // 2) // 3  # Divide by 3 for x,y,z and by 2 for sin/cos
         
         self.rotation_encoder = nn.Sequential(
-            nn.Linear(9, 512),  # Flattened rotation matrix
+            nn.Linear(9, 512),  # flattened rotation matrix
             nn.LayerNorm(512),
             nn.ReLU(),
             nn.Linear(512, output_dim)
@@ -25,15 +28,51 @@ class CameraEncoder(nn.Module):
             nn.ReLU(),
             nn.Linear(output_dim, output_dim)
         )
-        
         self.final_projection = nn.Sequential(
             nn.Linear(2 * output_dim, output_dim),
             nn.LayerNorm(output_dim)
         )
+        self.output_norm = nn.LayerNorm(output_dim)
+        
+        self.modulation_hidden_dims = modulation_hidden_dims or {}
+        
+        self.modulators = nn.ModuleDict()
+        for name, dim in self.modulation_hidden_dims.items():
+            self.modulators[name] = nn.Linear(output_dim, dim * 2)  # *2 for scale and shift
+            
+        self.init_modulators()
+        
+        self.current_step = 0
+        self.total_steps = 10000
     
 
+    def init_modulators(self):
+        for name, modulator in self.modulators.items():
+            nn.init.zeros_(modulator.weight)
+            nn.init.zeros_(modulator.bias)
+            
+            # Set scale biases to 1.0 (first half) and shift biases to 0.0 (second half)
+            dim = modulator.out_features // 2
+            modulator.bias.data[:dim] = 1.0  # scale initialized to 1
+                
+
+    def compute_relative_transform(self, source_camera: torch.Tensor, target_camera: torch.Tensor) -> Dict[str, torch.Tensor]:
+        
+        source_R = source_camera[:, :3, :3] 
+        source_T = source_camera[:, :3, 3]
+        target_R = target_camera[:, :3, :3]
+        target_T = target_camera[:, :3, 3]
+        
+        source_to_target_R = torch.bmm(target_R, source_R.transpose(1, 2))            
+        source_to_target_T = target_T - torch.bmm(source_to_target_R, source_T.unsqueeze(2)).squeeze(2)
+        
+        return {
+            'R': source_to_target_R,
+            'T': source_to_target_T
+        }
+
+
     def to(self, *args, **kwargs):
-        """Override to() to ensure all submodules are moved to the correct device"""
         device = args[0] if args else kwargs.get('device', None)
         dtype = kwargs.get('dtype', None)
         
@@ -41,18 +80,14 @@ class CameraEncoder(nn.Module):
             self.rotation_encoder = self.rotation_encoder.to(device=device, dtype=dtype)
             self.translation_encoder = self.translation_encoder.to(device=device, dtype=dtype)
             self.final_projection = self.final_projection.to(device=device, dtype=dtype)
+            self.output_norm = self.output_norm.to(device=device, dtype=dtype)
+            self.modulators = self.modulators.to(device=device, dtype=dtype)
         
         return super().to(*args, **kwargs)
     
 
     def positional_encoding(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Sinusoidal positional encoding for translation vectors
-        Args:
-            x: tensor of shape [B, 3] containing translation vectors
-        Returns:
-            encoding of shape [B, output_dim]
-        """
+
         device = x.device
         batch_size = x.shape[0]
         freqs = torch.exp(torch.linspace(0., np.log(self.max_freq), self.pos_enc_dim, device=device))
@@ -71,23 +106,29 @@ class CameraEncoder(nn.Module):
         
         return encoding
     
+
+    def encode_cameras(self, source_camera: torch.Tensor, target_camera: torch.Tensor) -> torch.Tensor:
+
+        device = next(self.parameters()).device
+        if hasattr(source_camera, 'to'):
+            source_camera = source_camera.to(device)
+        if hasattr(target_camera, 'to'):
+            target_camera = target_camera.to(device)
+        
+        camera_data = self.compute_relative_transform(source_camera, target_camera)
+        
+        return self.forward(camera_data)
+    
+
     def forward(self, camera_data: Dict[str, torch.Tensor]) -> torch.Tensor:
-        """
-        Process camera parameters and return combined embedding
-        Args:
-            camera_data: dict containing 'R' [B, 3, 3] and 'T' [B, 3]
-        Returns:
-            camera_embedding: [B, output_dim]
-        """
+
         R = camera_data['R']
         T = camera_data['T']
         
         device = R.device
         
         if next(self.rotation_encoder.parameters()).device != device:
-            self.rotation_encoder = self.rotation_encoder.to(device)
-            self.translation_encoder = self.translation_encoder.to(device)
-            self.final_projection = self.final_projection.to(device)
+            self.to(device)
         
         R = R.to(device)
         T = T.to(device)
@@ -100,5 +141,41 @@ class CameraEncoder(nn.Module):
         
         combined = torch.cat([rotation_embedding, translation_embedding], dim=-1)
         camera_embedding = self.final_projection(combined)
+
+        camera_embedding = self.output_norm(camera_embedding)
         
         return camera_embedding
+    
+    
+    def apply_modulation(self, hidden_states, modulator_name: str, camera_embedding: torch.Tensor):
+        if isinstance(hidden_states, tuple):
+            modulated_main = self.apply_modulation_to_tensor(hidden_states[0], modulator_name, camera_embedding)
+            return (modulated_main,) + hidden_states[1:]
+        else:
+            return self.apply_modulation_to_tensor(hidden_states, modulator_name, camera_embedding)
+
+
+    def apply_modulation_to_tensor(self, tensor, modulator_name, camera_embedding):
+
+        if modulator_name not in self.modulators:
+            return tensor
+            
+        modulation = self.modulators[modulator_name](camera_embedding)    # [B, C*2]
+        scale, shift = modulation.chunk(2, dim=-1)  # [B, C]
+
+        scale = scale.view(scale.shape[0], scale.shape[1], 1, 1)
+        shift = shift.view(shift.shape[0], shift.shape[1], 1, 1)
+
+        training_progress = float(self.current_step) / float(max(self.total_steps, 1))
+        training_progress = min(max(training_progress, 0.0), 1.0)
+        
+        # Use scalar value for modulation_strength
+        modulation_strength = 0.01 + 0.3 * torch.sigmoid(torch.tensor(10.0 * (training_progress - 0.5))).item()
+        
+        # Apply tanh to scale and ensure it's a tensor operation
+        scale = 1.0 + torch.tanh(scale) * 0.2
+        
+        # Apply controlled modulation
+        modulated = tensor * (1.0 - modulation_strength + modulation_strength * scale) + modulation_strength * shift
+        
+        return modulated

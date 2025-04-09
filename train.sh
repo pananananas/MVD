@@ -12,6 +12,6 @@
 
 echo "Run started"
 
-uv run train.py --config config/train_config.yaml
+uv run train.py --config config/train_config.yaml --cuda
 
 echo "Run completed! :>"

@@ -41,13 +41,6 @@ class MultiViewUNet(nn.Module):
         if enable_gradient_checkpointing:
             self.base_unet.enable_gradient_checkpointing()
         
-        self.camera_encoder = CameraEncoder(output_dim=1024).to(device=self.device, dtype=self.dtype)
-        
-        self.image_encoder = ImageEncoder(
-            pretrained_model_name_or_path=pretrained_model_name_or_path,
-            dtype=dtype
-        ).to(device=self.device, dtype=self.dtype)
-        
         down_channels = self.config.block_out_channels
         up_channels   = list(reversed(down_channels))
         mid_channels  = down_channels[-1]
@@ -55,21 +48,29 @@ class MultiViewUNet(nn.Module):
         num_down_blocks = len(self.base_unet.down_blocks)
         num_up_blocks   = len(self.base_unet.up_blocks)
         
-        self.down_modulators = nn.ModuleList([
-            nn.Linear(1024, down_channels[min(i, len(down_channels)-1)] * 2) 
-            for i in range(num_down_blocks)
-        ]).to(device=self.device, dtype=self.dtype)
+        # Build a dictionary of channel dimensions for the camera encoder
+        modulation_hidden_dims = {}
+        for i in range(num_down_blocks):
+            modulation_hidden_dims[f"down_{i}"] = down_channels[min(i, len(down_channels)-1)]
         
-        self.up_modulators = nn.ModuleList([
-            nn.Linear(1024, up_channels[i] * 2)
-            for i in range(num_up_blocks)
-        ]).to(device=self.device, dtype=self.dtype)
+        for i in range(num_up_blocks):
+            modulation_hidden_dims[f"up_{i}"] = up_channels[i]
         
-        self.mid_modulator = nn.Linear(1024, mid_channels * 2).to(device=self.device, dtype=self.dtype)
+        modulation_hidden_dims["mid"] = mid_channels
+        modulation_hidden_dims["output"] = 4  # For output modulation
         
-        self.output_modulator = nn.Linear(1024, 4 * 2).to(device=self.device, dtype=self.dtype)
-
+        self.camera_encoder = CameraEncoder(
+            output_dim=1024, 
+            modulation_hidden_dims=modulation_hidden_dims
+        ).to(device=self.device, dtype=self.dtype)
+        
+        self.image_encoder = ImageEncoder(
+            pretrained_model_name_or_path=pretrained_model_name_or_path,
+            dtype=dtype
+        ).to(device=self.device, dtype=self.dtype)
+        
         self._init_image_cross_attention()
+        self._register_modulation_hooks()
 
 
     def _init_image_cross_attention(self):
@@ -114,43 +115,6 @@ class MultiViewUNet(nn.Module):
         attn_module.processor = processor
 
 
-    def apply_shift_scale_modulation(self, hidden_states, modulator, camera_embedding):
-        """apply scale and shift modulation to hidden states"""
-
-        modulation = modulator(camera_embedding)    # [B, C*2]
-        scale, shift = modulation.chunk(2, dim=-1)  # [B, C]
-        
-        scale = scale.view(scale.shape[0], scale.shape[1], 1, 1)  # [B, C, 1, 1]
-        shift = shift.view(shift.shape[0], shift.shape[1], 1, 1)  # [B, C, 1, 1]
-        
-        with torch.no_grad():
-            scale_mean = scale.mean().item()
-            scale_std = scale.std().item()
-            scale_min = scale.min().item()
-            scale_max = scale.max().item()
-            
-            shift_mean = shift.mean().item()
-            shift_std = shift.std().item()
-            shift_min = shift.min().item()
-            shift_max = shift.max().item()
-            
-            logger.info(f"Modulation stats - Scale: mean={scale_mean:.4f}, std={scale_std:.4f}, min={scale_min:.4f}, max={scale_max:.4f}")
-            logger.info(f"Modulation stats - Shift: mean={shift_mean:.4f}, std={shift_std:.4f}, min={shift_min:.4f}, max={shift_max:.4f}")
-        
-        training_progress = getattr(self, 'current_step', 0) / max(getattr(self, 'total_steps', 10000), 1)
-        training_progress = min(max(training_progress, 0.0), 1.0)
-        
-        # start with minimal influence and gradually increase based on training progress
-        modulation_strength = 0.01 + 0.3 * torch.sigmoid(torch.tensor(10.0 * (training_progress - 0.5))).item()
-        
-        scale = 1.0 + torch.tanh(scale) * 0.2
-        
-        # apply controlled modulation that increases in strength over time
-        modulated = hidden_states * ((1.0 - modulation_strength) + modulation_strength * scale) + modulation_strength * shift
-        
-        return modulated
-
-
     def to(self, *args, **kwargs):
         device = args[0] if args else kwargs.get('device', self.device)
         dtype = kwargs.get('dtype', self.dtype)
@@ -161,10 +125,6 @@ class MultiViewUNet(nn.Module):
             
         self.camera_encoder   = self.camera_encoder.to(device=device, dtype=dtype)
         self.image_encoder    = self.image_encoder.to(device=device, dtype=dtype)
-        self.down_modulators  = self.down_modulators.to(device=device, dtype=dtype)
-        self.up_modulators    = self.up_modulators.to(device=device, dtype=dtype)
-        self.mid_modulator    = self.mid_modulator.to(device=device, dtype=dtype)
-        self.output_modulator = self.output_modulator.to(device=device, dtype=dtype)
         
         return super().to(*args, **kwargs)
 
@@ -187,15 +147,11 @@ class MultiViewUNet(nn.Module):
         logger.info(f"UNet input - sample shape: {sample.shape}")
         logger.info(f"UNet input - encoder_hidden_states shape: {encoder_hidden_states.shape}")
         
-        source_camera = source_camera or {}
-        target_camera = target_camera or {}
-        source_image_latents = source_image_latents or []
-        
-        if source_camera:
+        if source_camera is not None:
             logger.info(f"UNet input - source_camera shape: {source_camera.shape}")
-        if target_camera:
+        if target_camera is not None:
             logger.info(f"UNet input - target_camera shape: {target_camera.shape}")
-        if source_image_latents:
+        if source_image_latents is not None:
             logger.info(f"UNet input - source_image_latents shape: {source_image_latents.shape}")
 
         sample = sample.to(device=self.device, dtype=self.dtype)
@@ -208,17 +164,20 @@ class MultiViewUNet(nn.Module):
             encoder_hidden_states = encoder_hidden_states.repeat(repeat_factor, 1, 1)
         
         camera_embedding = None
-        if use_camera_embeddings and target_camera:
-            camera_embedding = self._process_camera(source_camera, target_camera, sample.shape[0])
-            sample = self.apply_shift_scale_modulation(sample, self.output_modulator, camera_embedding)
+        if use_camera_embeddings and target_camera is not None:
+            camera_embedding = self.camera_encoder.encode_cameras(source_camera, target_camera)
+            # Store for use in hooks
+            self.current_camera_embedding = camera_embedding
+            # Apply initial modulation to input
+            sample = self.camera_encoder.apply_modulation(sample, "output", camera_embedding)
         else:
-            camera_embedding = torch.zeros(sample.shape[0], 1024, device=self.device, dtype=self.dtype)
+            self.current_camera_embedding = torch.zeros(sample.shape[0], 1024, device=self.device, dtype=self.dtype)
         
         # Initialize reference hidden states dictionary
         ref_hidden_states = None
         
         # process source image if provided and image conditioning is enabled
-        if use_image_conditioning and source_image_latents:
+        if use_image_conditioning and source_image_latents is not None:
             try:
                 # use timestep 0 (beginning of diffusion) for feature extraction
                 batch_size = source_image_latents.shape[0]
@@ -266,7 +225,6 @@ class MultiViewUNet(nn.Module):
         if ref_hidden_states is not None:
             cross_attention_kwargs["ref_hidden_states"] = ref_hidden_states
         
-        # run the denoising UNet
         output = self.base_unet(
             sample=sample,
             timestep=timestep,
@@ -287,15 +245,6 @@ class MultiViewUNet(nn.Module):
     
     
     def _map_image_features_to_attention_layers(self, image_features):
-        """
-        Maps features extracted from the image encoder to the appropriate attention layers.
-        
-        Args:
-            image_features: Dictionary of features from the image encoder
-            
-        Returns:
-            Dictionary mapping attention layer names to corresponding image features
-        """
         ref_hidden_states = {}
         
         # First, let's create a more structured mapping of our attention layers
@@ -416,29 +365,24 @@ class MultiViewUNet(nn.Module):
         logger.info(f"Mapped {len(ref_hidden_states)}/{len(self.attention_layer_map)} attention layers to image features")
         
         return ref_hidden_states
-    
-    
-    def _process_camera(self, source_camera, target_camera, batch_size):
         
-        if hasattr(source_camera, 'to'):
-            source_camera = source_camera.to(device=self.device)
-        if hasattr(target_camera, 'to'):
-            target_camera = target_camera.to(device=self.device)
+
+    def _register_modulation_hooks(self):
+        """Register hooks to apply camera modulation throughout the UNet"""
         
-        source_R = source_camera[:, :3, :3] 
-        source_T = source_camera[:, :3, 3]
-        target_R = target_camera[:, :3, :3]
-        target_T = target_camera[:, :3, 3]
+        def get_hook(idx, direction):
+            def hook(module, inputs, output):
+                return self.camera_encoder.apply_modulation(output, f"{direction}_{idx}", self.current_camera_embedding)
+            return hook
         
-        source_to_target_R = torch.bmm(target_R, source_R.transpose(1, 2))            
-        source_to_target_T = target_T - torch.bmm(source_to_target_R, source_T.unsqueeze(2)).squeeze(2)
+        for i, block in enumerate(self.base_unet.down_blocks):
+            block.register_forward_hook(get_hook(i, "down"))
         
-        camera_dict = {
-            'R': source_to_target_R,
-            'T': source_to_target_T
-        }
-        return self.camera_encoder(camera_dict)
+        self.base_unet.mid_block.register_forward_hook(get_hook(0, "mid"))
         
+        for i, block in enumerate(self.base_unet.up_blocks):
+            block.register_forward_hook(get_hook(i, "up"))
+
 
 def create_mvd_pipeline(
     pretrained_model_name_or_path: str,
