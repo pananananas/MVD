@@ -70,6 +70,7 @@ processor = AutoProcessor.from_pretrained(
     min_pixels=min_pixels,
     max_pixels=max_pixels,
     cache_dir=HUGGINGFACE_CACHE,
+    use_fast=True,
 )
 
 

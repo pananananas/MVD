@@ -85,18 +85,16 @@ class MVDPipeline(StableDiffusionPipeline):
                 generator,
             )
         
-        # Process source images
         source_image_latents = None
         if source_images is not None:
             source_images = source_images.to(device=self.device)
             
-            # Scale to [-1, 1] if in [0, 1] range
+            # scale to [-1, 1] if in [0, 1] range
             if source_images.min() >= 0 and source_images.max() <= 1:
                 source_images = 2 * source_images - 1
                 
             with torch.no_grad():
                 if source_images.shape[0] < batch_size:
-                    # Repeat the source image if needed (e.g., for classifier-free guidance)
                     repeats = batch_size // source_images.shape[0]
                     source_images = source_images.repeat(repeats, 1, 1, 1)
                 
@@ -114,13 +112,11 @@ class MVDPipeline(StableDiffusionPipeline):
         if source_image_latents is not None:
             extra_kwargs["source_image_latents"] = source_image_latents
         
-        # Include ref_scale in cross_attention_kwargs
         cross_attention_kwargs = cross_attention_kwargs or {}
         cross_attention_kwargs["ref_scale"] = ref_scale
         
-        # Diffusion process
+
         for i, t in enumerate(self.progress_bar(timesteps)):
-            # Expand latents for classifier-free guidance
             latent_model_input = torch.cat([latents] * 2) if guidance_scale > 1.0 else latents
             
             noise_pred = self.unet(
@@ -133,12 +129,10 @@ class MVDPipeline(StableDiffusionPipeline):
                 **extra_kwargs
             ).sample
             
-            # Apply classifier-free guidance
             if guidance_scale > 1.0:
                 noise_pred_uncond, noise_pred_cond = noise_pred.chunk(2)
                 noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
             
-            # Compute previous noisy sample
             latents = self.scheduler.step(noise_pred, t, latents).prev_sample
             
             if callback is not None and i % callback_steps == 0:

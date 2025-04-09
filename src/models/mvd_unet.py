@@ -73,82 +73,56 @@ class MultiViewUNet(nn.Module):
 
 
     def _init_image_cross_attention(self):
-        """
-        Initialize image cross-attention processors for all attention layers in the UNet.
-        This replaces the default attention processors with our custom ImageCrossAttentionProcessor.
-        """
-        logger.info("Initializing image cross-attention processors")
-        
         self.attention_layer_map = {}
         
-        # Setup down blocks
         for i, block in enumerate(self.base_unet.down_blocks):
             if hasattr(block, 'attentions'):
                 for j, attn_block in enumerate(block.attentions):
                     for transformer_block in attn_block.transformer_blocks:
-                        # Process attn1 (self-attention)
                         name = f"down_block_{i}_attn_{j}_self"
                         self._replace_attention_processor(transformer_block.attn1, name)
                         
-                        # Process attn2 (cross-attention)
                         name = f"down_block_{i}_attn_{j}_cross"
                         self._replace_attention_processor(transformer_block.attn2, name)
         
-        # Setup mid block
         if hasattr(self.base_unet.mid_block, 'attentions'):
             for j, attn_block in enumerate(self.base_unet.mid_block.attentions):
                 for transformer_block in attn_block.transformer_blocks:
-                    # Process attn1 (self-attention)
                     name = f"mid_block_attn_{j}_self"
                     self._replace_attention_processor(transformer_block.attn1, name)
                     
-                    # Process attn2 (cross-attention)
                     name = f"mid_block_attn_{j}_cross"
                     self._replace_attention_processor(transformer_block.attn2, name)
         
-        # Setup up blocks
         for i, block in enumerate(self.base_unet.up_blocks):
             if hasattr(block, 'attentions'):
                 for j, attn_block in enumerate(block.attentions):
                     for transformer_block in attn_block.transformer_blocks:
-                        # Process attn1 (self-attention)
                         name = f"up_block_{i}_attn_{j}_self"
                         self._replace_attention_processor(transformer_block.attn1, name)
                         
-                        # Process attn2 (cross-attention)
                         name = f"up_block_{i}_attn_{j}_cross"
                         self._replace_attention_processor(transformer_block.attn2, name)
         
         logger.info(f"Initialized image cross-attention for {len(self.attention_layer_map)} attention layers")
     
+
     def _replace_attention_processor(self, attn_module, name):
-        """
-        Replace the attention processor with our image cross-attention processor.
-        
-        Args:
-            attn_module: Attention module to modify
-            name: Unique identifier for this attention layer
-        """
-        # Get processor for this module
-        processor = get_attention_processor_for_module(name, attn_module)
-        
-        # Save mapping from name to module for debugging
+
+        processor = get_attention_processor_for_module(name, attn_module)        
         self.attention_layer_map[name] = attn_module
-        
-        # Set the processor
         attn_module.processor = processor
 
 
-    def apply_modulation(self, hidden_states, modulator, camera_embedding):
+    def apply_shift_scale_modulation(self, hidden_states, modulator, camera_embedding):
         """apply scale and shift modulation to hidden states"""
-        modulation = modulator(camera_embedding)  # [B, C*2]
-        scale, shift = modulation.chunk(2, dim=-1)  # Each [B, C]
+
+        modulation = modulator(camera_embedding)    # [B, C*2]
+        scale, shift = modulation.chunk(2, dim=-1)  # [B, C]
         
-        # Reshape for broadcasting
         scale = scale.view(scale.shape[0], scale.shape[1], 1, 1)  # [B, C, 1, 1]
         shift = shift.view(shift.shape[0], shift.shape[1], 1, 1)  # [B, C, 1, 1]
         
-        # Add logging to track scale/shift statistics
         with torch.no_grad():
             scale_mean = scale.mean().item()
             scale_std = scale.std().item()
@@ -163,22 +137,15 @@ class MultiViewUNet(nn.Module):
             logger.info(f"Modulation stats - Scale: mean={scale_mean:.4f}, std={scale_std:.4f}, min={scale_min:.4f}, max={scale_max:.4f}")
             logger.info(f"Modulation stats - Shift: mean={shift_mean:.4f}, std={shift_std:.4f}, min={shift_min:.4f}, max={shift_max:.4f}")
         
-        # Ensure scale and shift have the correct number of channels
-        if scale.shape[1] != hidden_states.shape[1]:
-            raise ValueError(f"Channel dimension mismatch: scale has {scale.shape[1]} channels but hidden states has {hidden_states.shape[1]} channels")
-        
-        # Get current training progress from global step if available
         training_progress = getattr(self, 'current_step', 0) / max(getattr(self, 'total_steps', 10000), 1)
-        training_progress = min(max(training_progress, 0.0), 1.0)  # Clamp between 0 and 1
+        training_progress = min(max(training_progress, 0.0), 1.0)
         
-        # Start with minimal influence and gradually increase based on training progress
-        # Use a much gentler modulation strength with sigmoid curve
+        # start with minimal influence and gradually increase based on training progress
         modulation_strength = 0.01 + 0.3 * torch.sigmoid(torch.tensor(10.0 * (training_progress - 0.5))).item()
         
-        # Normalize scale closer to 1 to prevent extreme scaling
         scale = 1.0 + torch.tanh(scale) * 0.2
         
-        # Apply controlled modulation that increases in strength over time
+        # apply controlled modulation that increases in strength over time
         modulated = hidden_states * ((1.0 - modulation_strength) + modulation_strength * scale) + modulation_strength * shift
         
         return modulated
@@ -227,16 +194,11 @@ class MultiViewUNet(nn.Module):
             repeat_factor = sample.shape[0] // encoder_hidden_states.shape[0]
             encoder_hidden_states = encoder_hidden_states.repeat(repeat_factor, 1, 1)
         
-        # Only process camera if enabled
         camera_embedding = None
         if use_camera_embeddings and target_camera is not None:
-            camera_embedding = self._process_camera(target_camera, sample.shape[0])
-            
-            # apply camera modulation for output channels (should be 4 for latent space)
-            if sample.shape[1] == 4 and camera_embedding is not None:
-                sample = self.apply_modulation(sample, self.output_modulator, camera_embedding)
+            camera_embedding = self._process_camera(source_camera, target_camera, sample.shape[0])
+            sample = self.apply_shift_scale_modulation(sample, self.output_modulator, camera_embedding)
         else:
-            # Create dummy camera embedding if needed but won't be used
             camera_embedding = torch.zeros(sample.shape[0], 1024, device=self.device, dtype=self.dtype)
         
         # Initialize reference hidden states dictionary
@@ -311,7 +273,6 @@ class MultiViewUNet(nn.Module):
         return UNetOutput(sample=hidden_states)
     
     
-    # TODO: Improve that
     def _map_image_features_to_attention_layers(self, image_features):
         """
         Maps features extracted from the image encoder to the appropriate attention layers.
@@ -444,42 +405,27 @@ class MultiViewUNet(nn.Module):
         return ref_hidden_states
     
     
-    def _process_camera(self, camera, batch_size):
-        """
-        Process camera information into embeddings.
+    def _process_camera(self, source_camera, target_camera, batch_size):
         
-        Parameters:
-            camera: Camera information (dict, tensor, or None)
-            batch_size: Batch size for creating default embeddings if needed
-            
-        Returns:
-            camera_embedding: Tensor of shape [batch_size, 1024]
-        """
-        if camera is None:
-            return torch.zeros(batch_size, 1024, device=self.device, dtype=self.dtype)
+        if hasattr(source_camera, 'to'):
+            source_camera = source_camera.to(device=self.device)
+        if hasattr(target_camera, 'to'):
+            target_camera = target_camera.to(device=self.device)
         
-        if hasattr(camera, 'to'):
-            camera = camera.to(device=self.device)
+        source_R = source_camera[:, :3, :3] 
+        source_T = source_camera[:, :3, 3]
+        target_R = target_camera[:, :3, :3]
+        target_T = target_camera[:, :3, 3]
         
-        try:
-            # Convert camera format if needed
-            if not isinstance(camera, dict) and hasattr(camera, 'shape') and camera.shape[-2:] == (4, 4):
-                camera_dict = {
-                    'R': camera[:, :3, :3].to(device=self.device),  # Rotation matrix [B, 3, 3]
-                    'T': camera[:, :3, 3].to(device=self.device)    # Translation vector [B, 3]
-                }
-                return self.camera_encoder(camera_dict)
-            elif isinstance(camera, dict):
-                return self.camera_encoder(camera)
-            else:
-                # Unknown format, return zeros
-                return torch.zeros(batch_size, 1024, device=self.device, dtype=self.dtype)
-        except Exception as e:
-            # Log error and return zeros
-            logger.warning(f"Error processing camera: {str(e)}")
-            return torch.zeros(batch_size, 1024, device=self.device, dtype=self.dtype)
-
-
+        source_to_target_R = torch.bmm(target_R, source_R.transpose(1, 2))            
+        source_to_target_T = target_T - torch.bmm(source_to_target_R, source_T.unsqueeze(2)).squeeze(2)
+        
+        camera_dict = {
+            'R': source_to_target_R,
+            'T': source_to_target_T
+        }
+        return self.camera_encoder(camera_dict)
+        
 
 def create_mvd_pipeline(
     pretrained_model_name_or_path: str,
@@ -510,7 +456,6 @@ def create_mvd_pipeline(
     mv_unet = mv_unet.to(device=device, dtype=dtype)
     pipeline.unet = mv_unet
     
-    # Store config parameters on the pipeline for use during inference
     pipeline.use_camera_embeddings = use_camera_embeddings
     pipeline.use_image_conditioning = use_image_conditioning
     

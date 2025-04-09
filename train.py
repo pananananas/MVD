@@ -75,7 +75,7 @@ def main(config):
     trainer = Trainer(
         accelerator="auto",
         devices=config['num_gpus'],
-        strategy="ddp",
+        # strategy="ddp_find_unused_parameters_true",
         max_epochs=config['epochs'],
         logger=wandb_logger,
         callbacks=callbacks,
