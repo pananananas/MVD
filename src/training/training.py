@@ -237,6 +237,7 @@ class MVDLightningModule(LightningModule):
                     source_images=source_images,
                     num_images_per_prompt=1,
                     guidance_scale = 1.0,
+                    ref_scale = 0.1,
                     output_type="np"
                 )["images"]
                 

@@ -35,7 +35,7 @@ class MVDPipeline(StableDiffusionPipeline):
         source_camera: Optional[torch.Tensor] = None,
         target_camera: Optional[torch.Tensor] = None,
         source_images: Optional[torch.Tensor] = None,
-        ref_scale: float = 0.01,
+        ref_scale: float = 0.1,
     ):
         
         if prompt is not None and isinstance(prompt, str):
