@@ -268,7 +268,7 @@ class MVDLightningModule(LightningModule):
                     generated_img.save(save_dir / f'batch_{batch_idx}_sample_{i}_generated.png')
                 
                     
-                    if batch_idx % 50 == 0:
+                    if batch_idx % 500 == 0:
                         logger.info(f"Logging WandB images for batch {batch_idx}, sample {i}")
                         wandb.log({
                             f"samples/epoch_{epoch}_batch_{batch_idx}": [

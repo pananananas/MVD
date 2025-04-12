@@ -15,7 +15,7 @@ class ImageCrossAttentionProcessor(nn.Module):
         heads: int,
         dim_head: int = 64,
         dropout: float = 0.0,
-        scale: float = 0.05,
+        scale: float = 0.3,
     ):
         super().__init__()
 
@@ -50,7 +50,7 @@ class ImageCrossAttentionProcessor(nn.Module):
         attention_mask: Optional[torch.FloatTensor] = None,
         temb: Optional[torch.FloatTensor] = None,
         ref_hidden_states: Optional[Dict[str, torch.FloatTensor]] = None,
-        ref_scale: float = 0.1,
+        ref_scale: float = 0.3,
         *args,
         **kwargs
     ) -> torch.FloatTensor:

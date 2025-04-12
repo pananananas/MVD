@@ -11,7 +11,7 @@ use_image_conditioning: true
 # Training parameters
 learning_rate: 0.00001
 epochs: 100
-batch_size: 1
+batch_size: 2
 val_check_interval: 0.5  # Check every x epochs
 gradient_accumulation_steps: 20
 max_grad_norm: 1.0
