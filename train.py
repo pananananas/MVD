@@ -1,8 +1,9 @@
-from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor, Timer
 from src.data.objaverse_dataset import ObjaverseDataModule
-from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.strategies import DDPStrategy
 from src.training.training import MVDLightningModule
 from src.models.mvd_unet import create_mvd_pipeline
+from pytorch_lightning.loggers import WandbLogger
 from src.utils import create_output_dirs
 from pytorch_lightning import Trainer
 from pathlib import Path
@@ -13,7 +14,7 @@ import yaml
 import os
 
 
-def main(config, cuda):
+def main(config, cuda, resume_from_checkpoint=None):
     if cuda:
         torch.set_float32_matmul_precision('high')
         SCRATCH = os.getenv('SCRATCH', '/net/tscratch/people/plgewoj')
@@ -57,15 +58,25 @@ def main(config, cuda):
         dirs=dirs
     )
     
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=dirs['checkpoints'],
+        filename="mvd-{epoch:02d}-{val_loss:.2f}",
+        monitor="val/noise_loss",
+        mode="min",
+        save_top_k=config['max_checkpoints'],
+        save_last=True,
+        every_n_train_steps=1000,
+    )
+    
+    timer_callback = Timer(
+        duration={"hours": 47},
+        interval="step"
+    )
+    
     callbacks = [
-        ModelCheckpoint(
-            dirpath=dirs['checkpoints'],
-            filename="mvd-{epoch:02d}-{val_loss:.2f}",
-            monitor="val/noise_loss",
-            mode="min",
-            save_top_k=config['max_checkpoints'],
-        ),
+        checkpoint_callback,
         LearningRateMonitor(logging_interval='step'),
+        timer_callback,
     ]
     
     precision_value = "32" if config['torch_dtype'] == 'float32' else "16"
@@ -74,7 +85,7 @@ def main(config, cuda):
     trainer = Trainer(
         accelerator="auto",
         devices=config['num_gpus'],
-        # strategy="ddp_find_unused_parameters_true",
+        strategy=DDPStrategy(find_unused_parameters=False, static_graph=True),
         max_epochs=config['epochs'],
         logger=wandb_logger,
         callbacks=callbacks,
@@ -86,7 +97,7 @@ def main(config, cuda):
         precision=precision_value,
     )
     
-    trainer.fit(model, data_module)
+    trainer.fit(model, data_module, ckpt_path=resume_from_checkpoint or config.get('checkpoint_path'))
     
     wandb.finish()
 
@@ -111,6 +122,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="MVD Training Script")
     parser.add_argument('--config', type=str, default='config/train_config.yaml', help='Path to configuration file')
     parser.add_argument('--cuda', action='store_true', help='Use CUDA')
+    parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from')
     args = parser.parse_args()
     config = load_config(args.config)
     
@@ -124,4 +136,4 @@ if __name__ == '__main__':
     else:
         config['num_workers'] = 1
 
-    main(config, args.cuda)
+    main(config, args.cuda, resume_from_checkpoint=args.resume)

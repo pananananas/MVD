@@ -170,7 +170,8 @@ class CameraEncoder(nn.Module):
         training_progress = min(max(training_progress, 0.0), 1.0)
         
         # Use scalar value for modulation_strength
-        modulation_strength = 0.01 + 0.3 * torch.sigmoid(torch.tensor(10.0 * (training_progress - 0.5))).item()
+        # modulation_strength = 0.01 + 0.3 * torch.sigmoid(torch.tensor(10.0 * (training_progress - 0.5))).item()
+        modulation_strength = 0.1
         
         # Apply tanh to scale and ensure it's a tensor operation
         scale = 1.0 + torch.tanh(scale) * 0.2

@@ -1,11 +1,11 @@
 # Global tasks:
 - [x] przenieść nieprzetworzone dane do innego folderu, traning tylko na przetworzonych
-- [ ] add batch processing and multi GPU
-- [ ] add checkpointing and checking.
+- [x] add batch processing and multi GPU
+- [x] add checkpointing and checking.
 - [ ] dlaczego aktualne rozwiązanie nie działa?
   - [ ] validate the learned layers
-- [ ] implement multi-view attention layer
 - [ ] implement losses: SSIM, PSNR, perceptual, geometric
+- [ ] implement multi-view attention layer
 
 
 # Observations:

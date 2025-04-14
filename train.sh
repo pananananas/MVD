@@ -3,8 +3,9 @@
 #SBATCH -A plgtattooai-gpu-a100
 #SBATCH -p plgrid-gpu-a100
 #SBATCH --nodes=1
+#SBATCH --ntasks-per-node=2
 #SBATCH --cpus-per-task=16
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:2
 #SBATCH --mem=128GB
 #SBATCH -t 47:59:59
 #SBATCH -C memfs

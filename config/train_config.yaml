@@ -4,6 +4,9 @@ torch_dtype: float32
 use_memory_efficient_attention: true
 enable_gradient_checkpointing: true
 
+save_checkpoint_interval: 2  # Save every 2 hours
+checkpoint_path: null        # Path to checkpoint to resume from
+
 # Feature toggles for debugging
 use_camera_embeddings: true
 use_image_conditioning: true
@@ -13,7 +16,7 @@ learning_rate: 0.00001
 epochs: 100
 batch_size: 4
 val_check_interval: 0.5  # Check every x epochs
-gradient_accumulation_steps: 20
+gradient_accumulation_steps: 32
 max_grad_norm: 1.0
 early_stopping_patience: 20
 max_checkpoints: 5

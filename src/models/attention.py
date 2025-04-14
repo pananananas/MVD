@@ -112,13 +112,11 @@ class ImageCrossAttentionProcessor(nn.Module):
         ref_hidden_states = self.to_out_ref[0](ref_attention_output)
         ref_hidden_states = self.to_out_ref[1](ref_hidden_states)
         
-        # Reshape back to input shape if needed
         if input_ndim == 4:
             ref_hidden_states = ref_hidden_states.transpose(-1, -2).reshape(
                 batch_size, channel, height, width
             )
         
-        # Monitor statistics of outputs before combination
         with torch.no_grad():
             orig_mean = original_output.mean().item()
             orig_std = original_output.std().item()
@@ -131,8 +129,7 @@ class ImageCrossAttentionProcessor(nn.Module):
             if abs(ref_mean) > 0.5 or ref_std > 1.5:
                 ref_hidden_states = ref_hidden_states / max(ref_std, 1.0)
 
-        # clamp ref_scale to reasonable values
-        safe_ref_scale = min(max(ref_scale, 0.0), 0.5)
+        safe_ref_scale = min(max(ref_scale, 0.0), 0.2)
         combined_output = original_output + safe_ref_scale * ref_hidden_states
         
         return combined_output
