@@ -82,10 +82,15 @@ def main(config, cuda, resume_from_checkpoint=None):
     precision_value = "32" if config['torch_dtype'] == 'float32' else "16"
     print(f"Using PyTorch Lightning precision: {precision_value}")
     
+    if config['num_gpus'] > 1:
+        strategy = DDPStrategy(find_unused_parameters=False, static_graph=True)
+    else:
+        strategy = "auto"
+
     trainer = Trainer(
         accelerator="auto",
         devices=config['num_gpus'],
-        strategy=DDPStrategy(find_unused_parameters=False, static_graph=True),
+        strategy=strategy,
         max_epochs=config['epochs'],
         logger=wandb_logger,
         callbacks=callbacks,

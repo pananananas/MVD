@@ -129,16 +129,21 @@ class MVDLightningModule(LightningModule):
             noise=noise,
             denoised_latents=denoised_latents,
             target_latents=target_latents,
-            vae=self.vae,  # Pass the VAE for decoding
+            vae=self.vae,
             perceptual_loss_fn=self.perceptual_loss,
             ssim_loss_fn=self.ssim,
             config=self.config
         )
         
-        for name, value in losses.items():
-            if name != 'decoded_images' and name != 'total_loss':  # Skip non-scalar items
-                self.log(f"train/{name}", value.item() if torch.is_tensor(value) else value, 
-                       on_step=True, prog_bar=True)
+        self.log("train/noise_loss", losses['noise_loss'], on_step=True, prog_bar=True)
+        
+        if batch_idx % self.config.get('metrics_log_interval', 100) == 0:
+            for name, value in losses.items():
+                if name not in ['total_loss', 'noise_loss', 'decoded_images']:
+                    if torch.is_tensor(value):
+                        self.log(f"train_metrics/{name}", value.item(), on_step=True)
+                    else:
+                        self.log(f"train_metrics/{name}", value, on_step=True)
         
         step_output = {k: v.item() if torch.is_tensor(v) else v 
                       for k, v in losses.items() if k != 'decoded_images'}
@@ -162,9 +167,11 @@ class MVDLightningModule(LightningModule):
         )
         
         for name, value in losses.items():
-            if name != 'decoded_images' and name != 'total_loss':  # Skip non-scalar items
-                self.log(f"val/{name}", value.item() if torch.is_tensor(value) else value, 
-                       on_step=False, on_epoch=True)
+            if name != 'decoded_images':
+                if torch.is_tensor(value):
+                    self.log(f"val/{name}", value.item(), on_step=False, on_epoch=True)
+                else:
+                    self.log(f"val/{name}", value, on_step=False, on_epoch=True)
         
         step_output = {k: v.item() if torch.is_tensor(v) else v 
                       for k, v in losses.items() if k != 'decoded_images'}

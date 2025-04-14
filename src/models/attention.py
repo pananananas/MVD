@@ -65,16 +65,15 @@ class ImageCrossAttentionProcessor(nn.Module):
             **kwargs
         )
         
+        if ref_hidden_states is None or self.name not in ref_hidden_states:
+            return original_output
+            
         reference_states = ref_hidden_states[self.name]
         
-        # normalize reference features
         with torch.no_grad():
-            ref_mean = reference_states.mean().item()
-            ref_std = reference_states.std().item()
-
-            reference_states = (reference_states - reference_states.mean(dim=(0, 1), keepdim=True) * 0.5)
-            ref_std_tensor = torch.clamp(reference_states.std(dim=(0, 1), keepdim=True), min=1e-5)
-            reference_states = reference_states / ref_std_tensor * 0.8
+            reference_states = (reference_states - reference_states.mean(dim=(0, 1), keepdim=True))
+            ref_std_tensor = torch.clamp(reference_states.std(dim=(0, 1), keepdim=True), min=1e-6)
+            reference_states = reference_states / ref_std_tensor * 0.5
         
         input_ndim = hidden_states.ndim
         if input_ndim == 4:
@@ -129,7 +128,7 @@ class ImageCrossAttentionProcessor(nn.Module):
             if abs(ref_mean) > 0.5 or ref_std > 1.5:
                 ref_hidden_states = ref_hidden_states / max(ref_std, 1.0)
 
-        safe_ref_scale = min(max(ref_scale, 0.0), 0.2)
+        safe_ref_scale = min(max(ref_scale, 0.0), 0.1)
         combined_output = original_output + safe_ref_scale * ref_hidden_states
         
         return combined_output

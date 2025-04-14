@@ -156,7 +156,6 @@ class CameraEncoder(nn.Module):
 
 
     def apply_modulation_to_tensor(self, tensor, modulator_name, camera_embedding):
-
         if modulator_name not in self.modulators:
             return tensor
             
@@ -166,17 +165,10 @@ class CameraEncoder(nn.Module):
         scale = scale.view(scale.shape[0], scale.shape[1], 1, 1)
         shift = shift.view(shift.shape[0], shift.shape[1], 1, 1)
 
-        training_progress = float(self.current_step) / float(max(self.total_steps, 1))
-        training_progress = min(max(training_progress, 0.0), 1.0)
+        modulation_strength = 0.05
         
-        # Use scalar value for modulation_strength
-        # modulation_strength = 0.01 + 0.3 * torch.sigmoid(torch.tensor(10.0 * (training_progress - 0.5))).item()
-        modulation_strength = 0.1
+        scale = 1.0 + torch.tanh(scale) * 0.1
         
-        # Apply tanh to scale and ensure it's a tensor operation
-        scale = 1.0 + torch.tanh(scale) * 0.2
-        
-        # Apply controlled modulation
         modulated = tensor * (1.0 - modulation_strength + modulation_strength * scale) + modulation_strength * shift
         
         return modulated
