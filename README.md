@@ -1,40 +1,11 @@
-Now:
-Myślę że to wczytywanie features z image encodera działa poprawnie, ale na ten moment nic nie robię z tymi features, trzeba sprawdzić w jaki sposób sygnał z features jest wykorzystywany w modelu MVAdapter.
-
-
-
-
-
 # Global tasks:
-- [ ] add prompts to the dataset
-- [ ] implement image conditioning
+- [x] przenieść nieprzetworzone dane do innego folderu, traning tylko na przetworzonych
+- [ ] add batch processing and multi GPU
+- [ ] add checkpointing and checking.
+- [ ] dlaczego aktualne rozwiązanie nie działa?
+  - [ ] validate the learned layers
 - [ ] implement multi-view attention layer
-- [ ] change the camera conditioning, they should be from input view to target view
-
-
-# TODO:
-Data:
-- [ ] add a prompt.txt for every file in the dataset
-- [ ] filter out objects without textures
-
-Training:
-- [ ] change the training loop to use the new dataset
-- [ ] make the losses work on images instead of latents: SSIM, PSNR, perceptual, geometric
-
-Model:
-- [ ] Camera encoding
-Image conditioning:
-- [ ] Image encoder (features z zamrożonego UNETa)
-Attention (decoupled)
-- [ ] Spatial self-attention (frozen)
-- [ ] Image cross attention (duplicated from spatial)
-- [ ] Multi-view attention (duplicated from spatial)
-
-
-# Ideas:
-- LLM as a judge do oceny jakości generowanych obrazów
-
-
+- [ ] implement losses: SSIM, PSNR, perceptual, geometric
 
 
 # Observations:

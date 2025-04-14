@@ -19,10 +19,12 @@ import io
 # ===== CONFIGURATION =====
 # DATASET_PATH = "/Users/ewojcik/Code/pwr/MVD/objaverse/renders"
 DATASET_PATH = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/renders"
-FILTER_PATH = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/filtered_renders"
-os.makedirs(FILTER_PATH, exist_ok=True)
+REJECTED_SAMPLES_PATH = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/rejected"
+PROCESSING_QUEUE_PATH = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/queue"
+os.makedirs(REJECTED_SAMPLES_PATH, exist_ok=True)
+os.makedirs(DATASET_PATH, exist_ok=True)
 
-DB_PATH = os.path.join(os.path.dirname(FILTER_PATH), "processing_status.db")
+DB_PATH = os.path.join(os.path.dirname(REJECTED_SAMPLES_PATH), "processing_status.db")
 
 IMG_SIZE = (128, 128)
 NUM_OBJECTS = 100000
@@ -346,7 +348,7 @@ def main():
     conn = setup_database()
     cursor = conn.cursor()
     
-    zip_files = get_zip_files(DATASET_PATH, limit=NUM_OBJECTS)
+    zip_files = get_zip_files(PROCESSING_QUEUE_PATH, limit=NUM_OBJECTS)
         
     for zip_path in zip_files:
         cursor.execute("INSERT OR IGNORE INTO samples (path, processed) VALUES (?, ?)", 
@@ -396,7 +398,6 @@ def main():
                     valid_images.append(img)
             
             if not valid_descriptions:
-                
                 cursor.execute(
                     "UPDATE samples SET processed = 1, error = ? WHERE path = ?",
                     ("No valid descriptions generated", zip_path)
@@ -405,25 +406,30 @@ def main():
                 continue
             
             is_useful = filter_sample(valid_descriptions)
+            filename = os.path.basename(zip_path)
+            
             if is_useful:
                 distilled_prompt = distill_descriptions(valid_descriptions, object_data['prompt'])
                 add_prompt_to_zip(zip_path, distilled_prompt)
-            
+                
+                dataset_file_path = os.path.join(DATASET_PATH, filename)
+                shutil.move(zip_path, dataset_file_path)
+                
+                cursor.execute(
+                    "UPDATE samples SET processed = 1, is_useful = ?, prompt = ?, path = ? WHERE path = ?",
+                    (is_useful, distilled_prompt, dataset_file_path, zip_path)
+                )
             else:
                 distilled_prompt = 'useless sample'
-
-                filtered_path = os.path.join(FILTER_PATH, os.path.basename(zip_path))
-                os.makedirs(os.path.dirname(filtered_path), exist_ok=True)
+                filtered_path = os.path.join(REJECTED_SAMPLES_PATH, filename)
                 
-                shutil.copy2(zip_path, filtered_path)
+                shutil.move(zip_path, filtered_path)
                 
-                if os.path.exists(filtered_path):
-                    os.remove(zip_path)
+                cursor.execute(
+                    "UPDATE samples SET processed = 1, is_useful = ?, prompt = ?, path = ? WHERE path = ?",
+                    (is_useful, distilled_prompt, filtered_path, zip_path)
+                )
             
-            cursor.execute(
-                "UPDATE samples SET processed = 1, is_useful = ?, prompt = ? WHERE path = ?",
-                (is_useful, distilled_prompt, zip_path)
-            )
             conn.commit()
             
         except Exception as e:
