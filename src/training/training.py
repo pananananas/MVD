@@ -37,20 +37,11 @@ class MVDLightningModule(LightningModule):
         self.vae.eval()
         self.text_encoder.eval()
         
-        total_params = sum(p.numel() for p in self.unet.parameters())
-        trainable_params = sum(p.numel() for p in self.unet.parameters() if p.requires_grad)
-        percentage = trainable_params / total_params * 100
-        
-        logger.info(f"Total UNet parameters: {total_params:,}")
-        logger.info(f"Frozen parameters: {total_params - trainable_params:,}")
-        logger.info(f"Trainable parameters: {trainable_params:,}")
-        logger.info(f"Training: {percentage:.2f}% of the model")
-        
         self.dirs = dirs
         self.comparison_dir = self.dirs['comparisons']
         self.comparison_dir.mkdir(exist_ok=True, parents=True)
         
-        self.ssim = SSIM(data_range=2.0, size_average=True)  # range [-1,1]
+        self.ssim = SSIM(data_range=2.0, size_average=True)
         self.perceptual_loss = PerceptualLoss(device="cpu")
         
         self.training_step_outputs = []

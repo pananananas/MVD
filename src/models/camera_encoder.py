@@ -13,7 +13,7 @@ class CameraEncoder(nn.Module):
         self.output_dim = output_dim
         self.max_freq = max_freq
         
-        self.pos_enc_dim = (output_dim // 2) // 3  # Divide by 3 for x,y,z and by 2 for sin/cos
+        self.pos_enc_dim = (output_dim // 2) // 3
         
         self.rotation_encoder = nn.Sequential(
             nn.Linear(9, 512),  # flattened rotation matrix
@@ -92,14 +92,14 @@ class CameraEncoder(nn.Module):
         batch_size = x.shape[0]
         freqs = torch.exp(torch.linspace(0., np.log(self.max_freq), self.pos_enc_dim, device=device))
         
-        x_expanded = x.unsqueeze(-1)  # [B, 3, 1]
-        angles = x_expanded * freqs[None, None, :]  # [B, 3, pos_enc_dim]
+        x_expanded = x.unsqueeze(-1)
+        angles = x_expanded * freqs[None, None, :]
         
-        sin_enc = torch.sin(angles)  # [B, 3, pos_enc_dim]
-        cos_enc = torch.cos(angles)  # [B, 3, pos_enc_dim]
+        sin_enc = torch.sin(angles)
+        cos_enc = torch.cos(angles)
         
-        encoding = torch.cat([sin_enc, cos_enc], dim=-1)  # [B, 3, 2*pos_enc_dim]
-        encoding = encoding.reshape(batch_size, -1)       # [B, 6*pos_enc_dim]
+        encoding = torch.cat([sin_enc, cos_enc], dim=-1)
+        encoding = encoding.reshape(batch_size, -1)
         
         weight = torch.randn(self.output_dim, encoding.shape[-1], device=device) / np.sqrt(encoding.shape[-1])
         encoding = F.linear(encoding, weight)
@@ -159,13 +159,13 @@ class CameraEncoder(nn.Module):
         if modulator_name not in self.modulators:
             return tensor
             
-        modulation = self.modulators[modulator_name](camera_embedding)    # [B, C*2]
-        scale, shift = modulation.chunk(2, dim=-1)  # [B, C]
+        modulation = self.modulators[modulator_name](camera_embedding)
+        scale, shift = modulation.chunk(2, dim=-1)
 
         scale = scale.view(scale.shape[0], scale.shape[1], 1, 1)
         shift = shift.view(shift.shape[0], shift.shape[1], 1, 1)
 
-        modulation_strength = 0.05
+        modulation_strength = 0.2
         
         scale = 1.0 + torch.tanh(scale) * 0.1
         

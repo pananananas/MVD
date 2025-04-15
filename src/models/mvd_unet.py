@@ -175,9 +175,7 @@ class MultiViewUNet(nn.Module):
             camera_embedding = self.camera_encoder.encode_cameras(source_camera, target_camera)
             self.current_camera_embedding = camera_embedding
             sample = self.camera_encoder.apply_modulation(sample, "output", camera_embedding)
-        else:
-            self.current_camera_embedding = torch.zeros(sample.shape[0], 1024, device=self.device, dtype=self.dtype)
-        
+
         ref_hidden_states = None
         
         if use_image_conditioning and source_image_latents is not None:

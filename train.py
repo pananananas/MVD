@@ -122,8 +122,6 @@ def load_config(config_path):
 
 if __name__ == '__main__':
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
-
     parser = argparse.ArgumentParser(description="MVD Training Script")
     parser.add_argument('--config', type=str, default='config/train_config.yaml', help='Path to configuration file')
     parser.add_argument('--cuda', action='store_true', help='Use CUDA')
@@ -134,11 +132,9 @@ if __name__ == '__main__':
     if isinstance(config['image_size'], list):
         config['image_size'] = tuple(config['image_size'])
     
-    if device == "cuda":
-        config['num_workers'] = 16
-    elif  device == "mps":
-        config['num_workers'] = 6
+    if args.cuda:
+        config['num_workers'] = 32
     else:
-        config['num_workers'] = 1
+        config['num_workers'] = 6
 
     main(config, args.cuda, resume_from_checkpoint=args.resume)
