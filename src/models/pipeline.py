@@ -1,17 +1,11 @@
 from typing import Any, Callable, Dict, List, Optional, Union
 from diffusers import StableDiffusionPipeline
-import torch
 import logging
+import torch
 
 logger = logging.getLogger(__name__)
 
 class MVDPipeline(StableDiffusionPipeline):
-    """
-    Custom pipeline for Multi-View Diffusion models.
-    
-    This pipeline extends StableDiffusionPipeline to properly handle camera parameters
-    and pass them to the UNet during the diffusion process.
-    """
     @torch.no_grad()
     def __call__(
         self,

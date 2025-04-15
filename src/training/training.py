@@ -112,8 +112,8 @@ class MVDLightningModule(LightningModule):
         # clamping to prevent extreme values in VAE
         with torch.no_grad():
             if denoised_latents.abs().max().item() > 10.0:
-                logger.warning(f"Clamping extreme denoised latent values: {denoised_latents.abs().max().item():.4f}")
-                denoised_latents = torch.clamp(denoised_latents, -10.0, 10.0)
+                logger.warning(f"Extreme denoised latent values: {denoised_latents.abs().max().item():.4f}")
+                # denoised_latents = torch.clamp(denoised_latents, -10.0, 10.0)
         
             if denoised_latents.abs().max().item() > 10:
                 logger.warning(f"WARNING: Denoised latents have extreme values: max abs = {denoised_latents.abs().max().item():.4f}")
@@ -211,6 +211,7 @@ class MVDLightningModule(LightningModule):
     
 
     def _save_generated_samples(self, batch, batch_idx, epoch):
+        print(f"Saving generated samples for epoch {epoch} in batch {batch_idx}")
         
         with torch.no_grad():
             source_camera = batch.get('source_camera', None)
@@ -236,6 +237,7 @@ class MVDLightningModule(LightningModule):
                 source_images = source_images.to(self.device)
             
             try:
+                print(f"Generating images for batch {batch_idx} in epoch {epoch}")
                 images = self.pipeline(
                     prompt=batch['prompt'],
                     num_inference_steps=20,
@@ -247,6 +249,7 @@ class MVDLightningModule(LightningModule):
                     ref_scale = 0.1,
                     output_type="np"
                 )["images"]
+                print(f"Generation was successful for batch {batch_idx} in epoch {epoch}, saving samples")
                 
                 save_dir = self.dirs['samples'] / f"epoch_{epoch}"
                 save_dir.mkdir(exist_ok=True)
@@ -284,6 +287,7 @@ class MVDLightningModule(LightningModule):
                                 wandb.Image(generated_img, caption=f"Generated {i}")
                             ]
                         })
+                print(f'Saving samples was successful') 
 
             except Exception as e:
                 logger.error(f"Error in sample generation: {str(e)}")
