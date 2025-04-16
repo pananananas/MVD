@@ -2,6 +2,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor, Ti
 from src.data.objaverse_dataset import ObjaverseDataModule
 from pytorch_lightning.strategies import DDPStrategy
 from src.training.training import MVDLightningModule
+import torch.distributed as dist
 from src.models.mvd_unet import create_mvd_pipeline
 from pytorch_lightning.loggers import WandbLogger
 from src.utils import create_output_dirs
@@ -83,7 +84,8 @@ def main(config, cuda, resume_from_checkpoint=None):
     print(f"Using PyTorch Lightning precision: {precision_value}")
     
     if config['num_gpus'] > 1:
-        strategy = DDPStrategy(find_unused_parameters=False, static_graph=True)
+        dist.init_process_group(backend='nccl', init_method='env://')
+        strategy = "ddp"
     else:
         strategy = "auto"
 
