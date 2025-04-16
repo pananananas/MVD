@@ -10,8 +10,8 @@ class MVDPipeline(StableDiffusionPipeline):
     def __call__(
         self,
         prompt: Union[str, List[str]] = None,
-        height: Optional[int] = None,
-        width: Optional[int] = None,
+        height: Optional[int] = 64,
+        width: Optional[int] = 64,
         num_inference_steps: int = 50,
         guidance_scale: float = 7.5,
         negative_prompt: Optional[Union[str, List[str]]] = None,
@@ -74,6 +74,7 @@ class MVDPipeline(StableDiffusionPipeline):
             
         height = height or self.unet.config.sample_size * self.vae_scale_factor
         width = width or self.unet.config.sample_size * self.vae_scale_factor
+        print(f"Height: {height}, Width: {width}")
         
         if latents is None:
             latents = self.prepare_latents(

@@ -14,9 +14,9 @@ use_image_conditioning: true
 # Training parameters
 learning_rate: 0.00001
 epochs: 100
-batch_size: 4
+batch_size: 6
 val_check_interval: 0.5  # Check every x epochs
-gradient_accumulation_steps: 32
+gradient_accumulation_steps: 1
 max_grad_norm: 1.0
 early_stopping_patience: 20
 max_checkpoints: 5
@@ -25,11 +25,11 @@ sample_interval: 10
 # Dataset parameters
 dataset: Objaverse
 image_size:
-- 768
-- 768
+- 512
+- 512
 max_views_per_object: 8
-max_samples: 10000       # null for full dataset
-num_gpus: 1
+max_samples: 100       # null for full dataset
+num_gpus: 2
 
 # Loss weights
 noise_weight: 1.0
