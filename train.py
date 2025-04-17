@@ -2,18 +2,31 @@ from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor, Ti
 from src.data.objaverse_dataset import ObjaverseDataModule
 from pytorch_lightning.strategies import DDPStrategy
 from src.training.training import MVDLightningModule
-import torch.distributed as dist
 from src.models.mvd_unet import create_mvd_pipeline
 from pytorch_lightning.loggers import WandbLogger
 from src.utils import create_output_dirs
 from pytorch_lightning import Trainer
 from pathlib import Path
+import datetime
 import argparse
 import wandb
 import torch
 import yaml
 import os
 
+def get_gpu_devices():
+    if torch.cuda.is_available():
+        device_count = torch.cuda.device_count()
+        print(f"Found {device_count} GPU devices:")
+        devices = []
+        for i in range(device_count):
+            props = torch.cuda.get_device_properties(i)
+            print(f"Device {i}: {props.name}, Total Memory: {props.total_memory / 1e9:.2f} GB")
+            devices.append(torch.device(f'cuda:{i}'))
+        return devices
+    else:
+        print("No CUDA devices available")
+        return []
 
 def main(config, cuda, resume_from_checkpoint=None):
     if cuda:
@@ -84,8 +97,14 @@ def main(config, cuda, resume_from_checkpoint=None):
     print(f"Using PyTorch Lightning precision: {precision_value}")
     
     if config['num_gpus'] > 1:
-        dist.init_process_group(backend='nccl', init_method='env://')
-        strategy = "ddp"
+        
+        devices = get_gpu_devices()
+        print(f"Using {len(devices)} GPUs")
+
+        strategy = DDPStrategy(
+            find_unused_parameters=True,
+            timeout=datetime.timedelta(minutes=1)
+        )
     else:
         strategy = "auto"
 
