@@ -15,7 +15,7 @@ class ImageCrossAttentionProcessor(nn.Module):
         heads: int,
         dim_head: int = 64,
         dropout: float = 0.0,
-        scale: float = 0.3,
+        img_ref_scale: float = 0.3,
     ):
         super().__init__()
 
@@ -39,7 +39,7 @@ class ImageCrossAttentionProcessor(nn.Module):
             nn.Dropout(dropout)
         ])
         
-        self.ref_scale = nn.Parameter(torch.tensor(scale))
+        self.ref_scale = nn.Parameter(torch.tensor(img_ref_scale))
     
 
     def __call__(
@@ -50,7 +50,7 @@ class ImageCrossAttentionProcessor(nn.Module):
         attention_mask: Optional[torch.FloatTensor] = None,
         temb: Optional[torch.FloatTensor] = None,
         ref_hidden_states: Optional[Dict[str, torch.FloatTensor]] = None,
-        ref_scale: float = 0.3,
+        # ref_scale: float = 0.3,
         *args,
         **kwargs
     ) -> torch.FloatTensor:
@@ -121,14 +121,15 @@ class ImageCrossAttentionProcessor(nn.Module):
             orig_std  = original_output.std().item()
             ref_mean  = ref_hidden_states.mean().item()
             ref_std   = ref_hidden_states.std().item()
+            ref_scale_value = self.ref_scale.item() if isinstance(self.ref_scale, torch.Tensor) else self.ref_scale
             
             logger.debug(f"Layer {self.name} - Original: mean={orig_mean:.4f}, std={orig_std:.4f} | " 
-                         f"Reference: mean={ref_mean:.4f}, std={ref_std:.4f} | Scale: {ref_scale:.4f}")
+                         f"Reference: mean={ref_mean:.4f}, std={ref_std:.4f} | Scale: {ref_scale_value:.4f}")
             
             if abs(ref_mean) > 0.5 or ref_std > 1.5:
                 ref_hidden_states = ref_hidden_states / max(ref_std, 1.0)
 
-        safe_ref_scale = min(max(ref_scale, 0.0), 0.1)
+        safe_ref_scale = min(max(self.ref_scale, 0.0), 0.1)
         combined_output = original_output + safe_ref_scale * ref_hidden_states
         
         return combined_output
@@ -189,8 +190,7 @@ class ImageCrossAttentionProcessor(nn.Module):
                     self.to_v_ref.weight.copy_(projection)
 
 
-def get_attention_processor_for_module(name, attn_module):
-
+def get_attention_processor_for_module(name, attn_module, img_ref_scale=0.3):
     query_dim = attn_module.to_q.in_features
     heads = attn_module.heads
     dim_head = attn_module.to_q.out_features // heads
@@ -199,7 +199,8 @@ def get_attention_processor_for_module(name, attn_module):
         name=name,
         query_dim=query_dim,
         heads=heads,
-        dim_head=dim_head
+        dim_head=dim_head,
+        img_ref_scale=img_ref_scale
     )
     
     processor.original_processor = attn_module.processor

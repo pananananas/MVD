@@ -8,7 +8,7 @@ from typing import Dict
 logger = logging.getLogger(__name__)
 
 class CameraEncoder(nn.Module):
-    def __init__(self, output_dim: int = 768, max_freq: int = 10, modulation_hidden_dims: Dict[str, int] = None):
+    def __init__(self, output_dim: int = 768, max_freq: int = 10, modulation_hidden_dims: Dict[str, int] = None, modulation_strength: float = 0.2):
         super().__init__()
         self.output_dim = output_dim
         self.max_freq = max_freq
@@ -44,6 +44,9 @@ class CameraEncoder(nn.Module):
         
         self.current_step = 0
         self.total_steps = 10000
+        self.modulation_strength = modulation_strength
+        
+        logger.info(f"CameraEncoder initialized with modulation_strength={modulation_strength}")
     
 
     def init_modulators(self):
@@ -165,10 +168,9 @@ class CameraEncoder(nn.Module):
         scale = scale.view(scale.shape[0], scale.shape[1], 1, 1)
         shift = shift.view(shift.shape[0], shift.shape[1], 1, 1)
 
-        modulation_strength = 0.2
         
         scale = 1.0 + torch.tanh(scale) * 0.1
         
-        modulated = tensor * (1.0 - modulation_strength + modulation_strength * scale) + modulation_strength * shift
+        modulated = tensor * (1.0 - self.modulation_strength + self.modulation_strength * scale) + self.modulation_strength * shift
         
         return modulated

@@ -61,6 +61,8 @@ def main(config, cuda, resume_from_checkpoint=None):
         enable_gradient_checkpointing=config['enable_gradient_checkpointing'],
         use_camera_embeddings=config.get('use_camera_embeddings', True),
         use_image_conditioning=config.get('use_image_conditioning', True),
+        img_ref_scale=config.get('img_ref_scale', 0.3),
+        cam_modulation_strength=config.get('cam_modulation_strength', 0.2),
         cache_dir=HUGGINGFACE_CACHE if cuda else None,
     )
 

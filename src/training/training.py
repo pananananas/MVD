@@ -2,6 +2,7 @@ from .losses import PerceptualLoss, compute_losses
 from pytorch_lightning import LightningModule
 from pytorch_msssim import SSIM
 from PIL import Image
+import numpy as np
 import logging
 import wandb
 import torch
@@ -47,6 +48,22 @@ class MVDLightningModule(LightningModule):
         self.training_step_outputs = []
         self.validation_step_outputs = []
         
+        self.grad_norms = {}
+        self.param_norms = {}
+        self.last_batch = None
+
+        self.metrics_log_interval = self.config.get('metrics_log_interval', self.config.get('sample_interval', 10))
+        
+        self.monitored_param_groups = ['camera_encoder', 'down_modulators', 'up_modulators', 'mid_modulator']
+        
+        # store parameters by group for gradient monitoring
+        self.param_groups = {group: [] for group in self.monitored_param_groups}
+        for name, param in self.unet.named_parameters():
+            if param.requires_grad:
+                for group in self.monitored_param_groups:
+                    if group in name:
+                        self.param_groups[group].append((name, param))
+                        break
 
     def forward(self, batch):
         source_images = batch['source_image'].to(self.device)
@@ -113,6 +130,8 @@ class MVDLightningModule(LightningModule):
     
 
     def training_step(self, batch, batch_idx):
+        self.last_batch = batch
+        
         noise_pred, noise, denoised_latents, target_latents, source_latents = self.forward(batch)
 
         losses = compute_losses(
@@ -128,7 +147,7 @@ class MVDLightningModule(LightningModule):
         
         self.log("train/noise_loss", losses['noise_loss'], on_step=True, prog_bar=True)
         
-        if batch_idx % self.config.get('metrics_log_interval', 100) == 0:
+        if batch_idx % self.metrics_log_interval == 0:
             for name, value in losses.items():
                 if name not in ['total_loss', 'noise_loss', 'decoded_images']:
                     if torch.is_tensor(value):
@@ -289,3 +308,76 @@ class MVDLightningModule(LightningModule):
                     print(f"Target camera type: {type(target_camera)}, shape: {target_camera.shape}")
                 if source_images is not None:
                     print(f"Source images type: {type(source_images)}, shape: {source_images.shape}") 
+
+    def on_after_backward(self):
+        if self.global_step % self.metrics_log_interval == 0:
+            for group_name, params in self.param_groups.items():
+                group_grad_norm = 0.0
+                group_param_norm = 0.0
+                group_grad_max = 0.0
+                group_grad_min = float('inf')
+                grad_histogram_values = []
+                
+                for name, param in params:
+                    if param.grad is not None:
+                        grad_norm = param.grad.norm().item()
+                        param_norm = param.norm().item()
+                        
+                        group_grad_norm += grad_norm
+                        group_param_norm += param_norm
+                        
+                        grad_max = param.grad.max().item()
+                        grad_min = param.grad.min().item()
+                        
+                        if grad_max > group_grad_max:
+                            group_grad_max = grad_max
+                        if grad_min < group_grad_min:
+                            group_grad_min = grad_min
+                        
+                        if self.global_step % (self.metrics_log_interval * 5) == 0:
+                            self.log(f"gradients/{group_name}/{name}_norm", grad_norm, on_step=True)
+                            self.log(f"parameters/{group_name}/{name}_norm", param_norm, on_step=True)
+                        
+                        if self.global_step % (self.metrics_log_interval * 10) == 0:
+                            flat_grads = param.grad.flatten().cpu().numpy()
+                            if len(flat_grads) > 1000:
+                                indices = torch.randperm(len(flat_grads))[:1000]
+                                flat_grads = flat_grads[indices]
+                            grad_histogram_values.extend(flat_grads)
+                
+                self.log(f"gradients/{group_name}/total_norm", group_grad_norm, on_step=True)
+                self.log(f"parameters/{group_name}/total_norm", group_param_norm, on_step=True)
+                self.log(f"gradients/{group_name}/max_value", group_grad_max, on_step=True)
+                self.log(f"gradients/{group_name}/min_value", group_grad_min, on_step=True)
+                
+                if self.global_step % (self.metrics_log_interval * 10) == 0 and grad_histogram_values and self.logger:
+                    if hasattr(self.logger, "experiment"):
+                        self.logger.experiment.log({
+                            f"gradients/{group_name}/histogram": wandb.Histogram(
+                                np.array(grad_histogram_values)
+                            ),
+                            "global_step": self.global_step
+                        })
+            
+            for group_name in self.monitored_param_groups:
+                self.grad_norms[group_name] = group_grad_norm
+                self.param_norms[group_name] = group_param_norm
+            
+            for group_name in self.monitored_param_groups:
+                if group_name in self.grad_norms and group_name in self.param_norms:
+                    grad_to_param_ratio = self.grad_norms[group_name] / (self.param_norms[group_name] + 1e-8)
+                    self.log(f"gradients/{group_name}/grad_to_param_ratio", grad_to_param_ratio, on_step=True)
+            
+            if hasattr(self.trainer, "optimizers"):
+                optimizer = self.trainer.optimizers[0]
+                for i, param_group in enumerate(optimizer.param_groups):
+                    if "lr" in param_group:
+                        self.log(f"optimizer/param_group_{i}_lr", param_group["lr"], on_step=True)
+
+    def on_train_epoch_end(self):
+        avg_metrics = {}
+        for metric in self.training_step_outputs[0].keys():
+            avg_metrics[metric] = sum(output[metric] for output in self.training_step_outputs) / len(self.training_step_outputs)
+            self.log(f"train_epoch/{metric}", avg_metrics[metric])
+        
+        self.training_step_outputs.clear() 

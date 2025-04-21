@@ -20,6 +20,8 @@ class MultiViewUNet(nn.Module):
         dtype: torch.dtype = torch.float32,
         use_memory_efficient_attention: bool = True,
         enable_gradient_checkpointing: bool = True,
+        img_ref_scale: float = 0.3,
+        cam_modulation_strength: float = 0.2,
     ):
         super().__init__()
         
@@ -35,6 +37,7 @@ class MultiViewUNet(nn.Module):
         self.config = self.base_unet.config        
         self.device = self.base_unet.device
         self.dtype  = self.base_unet.dtype
+        self.img_ref_scale = img_ref_scale
 
         expected_sample_size = self.config.sample_size
 
@@ -60,7 +63,8 @@ class MultiViewUNet(nn.Module):
         
         self.camera_encoder = CameraEncoder(
             output_dim=1024, 
-            modulation_hidden_dims=modulation_hidden_dims
+            modulation_hidden_dims=modulation_hidden_dims,
+            modulation_strength=cam_modulation_strength
         ).to(device=self.device, dtype=self.dtype)
         
         self.image_encoder = ImageEncoder(
@@ -71,7 +75,6 @@ class MultiViewUNet(nn.Module):
         
         self._init_image_cross_attention()
         self._register_modulation_hooks()
-
 
     def _init_image_cross_attention(self):
         self.attention_layer_map = {}
@@ -126,8 +129,7 @@ class MultiViewUNet(nn.Module):
         
 
     def _replace_attention_processor(self, attn_module, name):
-
-        processor = get_attention_processor_for_module(name, attn_module)        
+        processor = get_attention_processor_for_module(name, attn_module, img_ref_scale=self.img_ref_scale)
         self.attention_layer_map[name] = attn_module
         attn_module.processor = processor
 
@@ -260,6 +262,8 @@ def create_mvd_pipeline(
     enable_gradient_checkpointing: bool = True,
     use_camera_embeddings: bool = True,
     use_image_conditioning: bool = True,
+    img_ref_scale: float = 0.3,
+    cam_modulation_strength: float = 0.2,
     cache_dir=None,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
@@ -278,11 +282,14 @@ def create_mvd_pipeline(
         dtype=dtype,
         use_memory_efficient_attention=use_memory_efficient_attention,
         enable_gradient_checkpointing=enable_gradient_checkpointing,
+        img_ref_scale=img_ref_scale,
+        cam_modulation_strength=cam_modulation_strength,
     )
     mv_unet = mv_unet.to(device=device, dtype=dtype)
     pipeline.unet = mv_unet
     
     pipeline.use_camera_embeddings = use_camera_embeddings
     pipeline.use_image_conditioning = use_image_conditioning
+    pipeline.img_ref_scale = img_ref_scale
     
     return pipeline

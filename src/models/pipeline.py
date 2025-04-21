@@ -29,7 +29,7 @@ class MVDPipeline(StableDiffusionPipeline):
         source_camera: Optional[torch.Tensor] = None,
         target_camera: Optional[torch.Tensor] = None,
         source_images: Optional[torch.Tensor] = None,
-        ref_scale: float = 0.3,
+        ref_scale: float = None,
     ):
         
         if prompt is not None and isinstance(prompt, str):
@@ -116,9 +116,10 @@ class MVDPipeline(StableDiffusionPipeline):
             logger.info(f"Source image latents shape: {source_image_latents.shape}")
             extra_kwargs["source_image_latents"] = source_image_latents
         
-        cross_attention_kwargs = cross_attention_kwargs or {}
-        cross_attention_kwargs["ref_scale"] = ref_scale
+        if ref_scale is None:
+            ref_scale = getattr(self, 'img_ref_scale', 0.3)
         
+        cross_attention_kwargs = cross_attention_kwargs or {}
 
         for i, t in enumerate(self.progress_bar(timesteps)):
             latent_model_input = torch.cat([latents] * 2) if guidance_scale > 1.0 else latents
