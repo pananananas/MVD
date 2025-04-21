@@ -16,7 +16,7 @@ learning_rate: 0.00001
 epochs: 100
 batch_size: 5
 val_check_interval: 0.5  # Check every x epochs
-gradient_accumulation_steps: 4
+gradient_accumulation_steps: 2
 max_grad_norm: 1.0
 early_stopping_patience: 20
 max_checkpoints: 5
@@ -28,7 +28,7 @@ image_size:
 - 768
 - 768
 max_views_per_object: 8
-max_samples: 100       # null for full dataset
+max_samples: 10000       # null for full dataset
 num_gpus: 2
 
 # Loss weights

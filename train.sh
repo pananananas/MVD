@@ -13,6 +13,8 @@
 
 echo "Run started"
 
-uv run train.py --config config/train_config.yaml --cuda
+source .venv/bin/activate
+torchrun --nproc_per_node=2 --standalone train.py
+# uv run train.py --config config/train_config.yaml --cuda
 
 echo "Run completed! :>"

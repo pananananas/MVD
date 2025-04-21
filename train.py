@@ -119,6 +119,8 @@ def main(config, cuda, resume_from_checkpoint=None):
         accumulate_grad_batches=config['gradient_accumulation_steps'],
         val_check_interval=config['val_check_interval'],
         log_every_n_steps=1,
+        enable_progress_bar=True,
+        enable_model_summary=True,
         deterministic=False,
         precision=precision_value,
     )
@@ -145,7 +147,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description="MVD Training Script")
     parser.add_argument('--config', type=str, default='config/train_config.yaml', help='Path to configuration file')
-    parser.add_argument('--cuda', action='store_true', help='Use CUDA')
+    parser.add_argument('--cuda', action='store_false', help='Use CUDA')
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from')
     args = parser.parse_args()
     config = load_config(args.config)
