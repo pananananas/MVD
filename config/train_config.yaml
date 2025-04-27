@@ -1,6 +1,6 @@
 # Experiment tracking
 version: v1
-note: "with clamping to prevent extreme values in VAE"
+note: "changed denoising formula, added debug prints"
 
 # Model parameters
 architecture: stabilityai/stable-diffusion-2-1
@@ -9,11 +9,12 @@ use_memory_efficient_attention: true
 enable_gradient_checkpointing: true
 
 # Conditioning parameters
-img_ref_scale: 0.5
-cam_modulation_strength: 0.5
+img_ref_scale: 0.1
+cam_modulation_strength: 0.1
 
 # Training parameters
 num_gpus: 2
+num_workers: 32
 learning_rate: 0.00001
 epochs: 20
 batch_size: 5

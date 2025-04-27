@@ -1,6 +1,7 @@
 from .losses import PerceptualLoss, compute_losses
 from pytorch_lightning import LightningModule
 from pytorch_msssim import SSIM
+from icecream import ic
 from PIL import Image
 import numpy as np
 import logging
@@ -71,9 +72,11 @@ class MVDLightningModule(LightningModule):
 
         source_latents = self.vae.encode(source_images).latent_dist.sample()
         source_latents = source_latents * self.vae.config.scaling_factor
+        ic(source_latents)
         
         target_latents = self.vae.encode(target_images).latent_dist.sample()
         target_latents = target_latents * self.vae.config.scaling_factor
+        ic(target_latents)
         
         prompts = batch['prompt']
         
@@ -84,6 +87,9 @@ class MVDLightningModule(LightningModule):
             source_camera = source_camera.to(self.device)
         if target_camera is not None and hasattr(target_camera, 'to'):
             target_camera = target_camera.to(self.device)
+        
+        ic(source_camera)
+        ic(target_camera)
             
         text_input = self.tokenizer(
             prompts,
@@ -96,13 +102,17 @@ class MVDLightningModule(LightningModule):
         text_embeddings = self.text_encoder(text_input.input_ids)[0]
         
         noise = torch.randn_like(source_latents)
-        timesteps = torch.randint(
-            0,
-            self.scheduler.config.num_train_timesteps,
-            (source_latents.shape[0],),
-            device=self.device
-        )
+        max_timestep = min(500, int(self.scheduler.config.num_train_timesteps * 
+                               (self.current_epoch / 10)))  # Increase noise gradually over 10 epochs
+        timesteps = torch.randint(0, max_timestep, (source_latents.shape[0],), device=self.device)
+        ic(timesteps)
+        
         noisy_latents = self.scheduler.add_noise(source_latents, noise, timesteps)
+        ic(noisy_latents)
+        
+        # Let's also log the scheduler's alpha values
+        alpha_t = self.scheduler.alphas_cumprod[timesteps]
+        ic(alpha_t)
         
         noise_pred = self.unet(
             sample=noisy_latents,
@@ -112,16 +122,39 @@ class MVDLightningModule(LightningModule):
             target_camera=target_camera,
             source_image_latents=source_latents,
         ).sample
+        ic(noise_pred)
+
+        # NEW DENOISING FORMULA
         
-        alpha_t = self.scheduler.alphas_cumprod[timesteps]
-        alpha_t = alpha_t.view(-1, 1, 1, 1)
-        denoised_latents = (noisy_latents - (1 - alpha_t).sqrt() * noise_pred) / alpha_t.sqrt()
+        alpha_t = self.scheduler.alphas_cumprod[timesteps].view(-1, 1, 1, 1)
+        ic(alpha_t)
+        alpha_t_safe = torch.clamp(alpha_t, min=1e-4)  # Prevent division by very small values
+        ic(alpha_t_safe)
+        beta_t = 1 - alpha_t
+        ic(beta_t)
+
+        # More stable computation
+        pred_x0 = (noisy_latents - beta_t.sqrt() * noise_pred) / alpha_t_safe.sqrt()
+        denoised_latents = torch.clamp(pred_x0, -10.0, 10.0)  # Apply clipping early
         
-        max_abs_value = denoised_latents.abs().max().item()
-        if max_abs_value > 10.0:
-            logger.warning(f"Extreme denoised latent values: {max_abs_value:.4f}, clamping")
-            denoised_latents = torch.clamp(denoised_latents, -10.0, 10.0)
+        # After creating timesteps
+        ic(f"timestep_distribution", timesteps.min().item(), timesteps.mean().item(), timesteps.max().item())
         
+        # After getting source_latents
+        ic(f"source_latents_distribution", source_latents.min().item(), source_latents.mean().item(), 
+           source_latents.max().item(), source_latents.std().item())
+        
+        # After denoising formula
+        ic(f"alpha_t_min", alpha_t.min().item())
+        ic(f"scaling_factor_max", alpha_t_safe.max().item())
+        
+        # Track how extreme values evolve
+        if self.global_step % 10 == 0:
+            with torch.no_grad():
+                for name, module in self.vae.named_modules():
+                    if isinstance(module, torch.nn.Conv2d) or isinstance(module, torch.nn.Linear):
+                        if module.weight is not None:
+                            ic(f"vae_{name}_weight_norm", module.weight.norm().item())
         
         return noise_pred, noise, denoised_latents, target_latents, source_latents
     
@@ -247,7 +280,7 @@ class MVDLightningModule(LightningModule):
                 print(f"Generating images for batch {batch_idx} in epoch {epoch}")
                 images = self.pipeline(
                     prompt=batch['prompt'],
-                    num_inference_steps=20,
+                    num_inference_steps=2,
                     source_camera=source_camera,
                     target_camera=target_camera,
                     source_images=source_images,

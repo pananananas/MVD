@@ -6,6 +6,7 @@ from src.models.mvd_unet import create_mvd_pipeline
 from pytorch_lightning.loggers import WandbLogger
 from src.utils import create_output_dirs
 from pytorch_lightning import Trainer
+import lovely_tensors as lt
 from pathlib import Path
 import datetime
 import argparse
@@ -13,6 +14,9 @@ import wandb
 import torch
 import yaml
 import os
+
+lt.monkey_patch()
+
 
 def get_gpu_devices():
     if torch.cuda.is_available():
@@ -39,10 +43,15 @@ def main(config, cuda, resume_from_checkpoint=None):
     else:
         dataset_path = "/Users/ewojcik/Code/pwr/MVD/objaverse"
 
-    wandb_logger = WandbLogger(
+    wandb.init(
         project="mvd",
         config=config,
+    )
+    
+    wandb_logger = WandbLogger(
+        project="mvd",
         log_model=True,
+        experiment=wandb.run
     )
 
     data_module = ObjaverseDataModule(
@@ -156,10 +165,5 @@ if __name__ == '__main__':
     
     if isinstance(config['image_size'], list):
         config['image_size'] = tuple(config['image_size'])
-    
-    if args.cuda:
-        config['num_workers'] = 32
-    else:
-        config['num_workers'] = 6
 
     main(config, args.cuda, resume_from_checkpoint=args.resume)
