@@ -179,8 +179,10 @@ class ObjaverseDataset(Dataset):
             source_img = self.transform(source_img)
             target_img = self.transform(target_img)
         
-        source_img_tensor = torch.from_numpy(np.array(source_img)).permute(2, 0, 1).float() / 255.0
-        target_img_tensor = torch.from_numpy(np.array(target_img)).permute(2, 0, 1).float() / 255.0
+        # source_img_tensor = torch.from_numpy(np.array(source_img)).permute(2, 0, 1).float() / 255.0
+        # target_img_tensor = torch.from_numpy(np.array(target_img)).permute(2, 0, 1).float() / 255.0
+        source_img_tensor = torch.from_numpy(np.array(source_img)).permute(2, 0, 1).float() / 127.5 - 1.0
+        target_img_tensor = torch.from_numpy(np.array(target_img)).permute(2, 0, 1).float() / 127.5 - 1.0
         source_cam_tensor = torch.from_numpy(source_cam).float()
         target_cam_tensor = torch.from_numpy(target_cam).float()
         

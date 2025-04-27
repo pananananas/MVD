@@ -1,5 +1,6 @@
 # Experiment tracking
 version: v1
+note: "with clamping to prevent extreme values in VAE"
 
 # Model parameters
 architecture: stabilityai/stable-diffusion-2-1

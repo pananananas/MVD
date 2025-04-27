@@ -14,6 +14,7 @@ dependencies = [
     "icecream>=2.1.4",
     "kornia>=0.8.0",
     "lightning==2.5.0",
+    "lovely-tensors>=0.1.18",
     "mathutils>=3.3.0",
     "numpy>=2.2.3",
     "objaverse>=0.1.7",
