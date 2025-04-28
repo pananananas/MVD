@@ -102,8 +102,17 @@ class MVDLightningModule(LightningModule):
         text_embeddings = self.text_encoder(text_input.input_ids)[0]
         
         noise = torch.randn_like(source_latents)
-        max_timestep = min(500, int(self.scheduler.config.num_train_timesteps * 
-                               (self.current_epoch / 10)))  # Increase noise gradually over 10 epochs
+        # Ensure max_timestep is at least 1
+        max_timestep_raw = min(500, int(self.scheduler.config.num_train_timesteps * ((self.current_epoch + 1) / 10))) 
+        max_timestep = max(1, max_timestep_raw) # Ensure max_timestep is at least 1
+        
+        ic(self.current_epoch)
+        ic(max_timestep)       
+        
+        # Ensure the upper bound is strictly greater than the lower bound
+        if max_timestep <= 0:
+             raise ValueError(f"max_timestep must be greater than 0, but got {max_timestep}")
+
         timesteps = torch.randint(0, max_timestep, (source_latents.shape[0],), device=self.device)
         ic(timesteps)
         
@@ -137,8 +146,7 @@ class MVDLightningModule(LightningModule):
         pred_x0 = (noisy_latents - beta_t.sqrt() * noise_pred) / alpha_t_safe.sqrt()
         denoised_latents = torch.clamp(pred_x0, -10.0, 10.0)  # Apply clipping early
         
-        # After creating timesteps
-        ic(f"timestep_distribution", timesteps.min().item(), timesteps.mean().item(), timesteps.max().item())
+        ic(f"timestep_distribution", timesteps)
         
         # After getting source_latents
         ic(f"source_latents_distribution", source_latents.min().item(), source_latents.mean().item(), 
@@ -280,7 +288,7 @@ class MVDLightningModule(LightningModule):
                 print(f"Generating images for batch {batch_idx} in epoch {epoch}")
                 images = self.pipeline(
                     prompt=batch['prompt'],
-                    num_inference_steps=2,
+                    num_inference_steps=20,
                     source_camera=source_camera,
                     target_camera=target_camera,
                     source_images=source_images,

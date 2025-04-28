@@ -42,16 +42,11 @@ def main(config, cuda, resume_from_checkpoint=None):
         dataset_path = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/"
     else:
         dataset_path = "/Users/ewojcik/Code/pwr/MVD/objaverse"
-
-    wandb.init(
-        project="mvd",
-        config=config,
-    )
     
     wandb_logger = WandbLogger(
         project="mvd",
+        config=config,
         log_model=True,
-        experiment=wandb.run
     )
 
     data_module = ObjaverseDataModule(
