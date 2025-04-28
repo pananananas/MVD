@@ -35,9 +35,20 @@ class PerceptualLoss:
         return self
 
 
-def compute_losses(noise_pred, noise, denoised_latents=None, target_latents=None, vae=None, perceptual_loss_fn=None, ssim_loss_fn=None, config=None):
+def compute_losses(
+    noise_pred, 
+    noise, 
+    noisy_latents=None,
+    timesteps=None,
+    target_latents=None, 
+    vae=None, 
+    scheduler=None,
+    perceptual_loss_fn=None, 
+    ssim_loss_fn=None, 
+    config=None
+):
     
-    noise_loss = F.mse_loss(noise_pred, noise)
+    noise_loss = F.mse_loss(noise_pred.float(), noise.float())
     total_loss = noise_loss
     
     device = noise_loss.device
@@ -50,16 +61,20 @@ def compute_losses(noise_pred, noise, denoised_latents=None, target_latents=None
         'ssim_value': zero_tensor
     }
     
-    if denoised_latents is not None and target_latents is not None and vae is not None:
+    if noisy_latents is not None and timesteps is not None and target_latents is not None and vae is not None and scheduler is not None:
         with torch.no_grad():
             try:
-                latent_recon_loss = F.mse_loss(denoised_latents, target_latents).detach()
+                alpha_t = scheduler.alphas_cumprod[timesteps].to(device).view(-1, 1, 1, 1)
+                beta_t = 1.0 - alpha_t
+                denoised_latents = (noisy_latents - beta_t.sqrt() * noise_pred) / alpha_t.sqrt()
+
+                latent_recon_loss = F.mse_loss(denoised_latents.float(), target_latents.float()).detach()
                 metrics['latent_recon_loss'] = latent_recon_loss
                 
                 denoised_images = vae.decode(denoised_latents / vae.config.scaling_factor).sample
                 target_images = vae.decode(target_latents / vae.config.scaling_factor).sample
                 
-                pixel_recon_loss = F.mse_loss(denoised_images, target_images).detach()
+                pixel_recon_loss = F.mse_loss(denoised_images.float(), target_images.float()).detach()
                 metrics['pixel_recon_loss'] = pixel_recon_loss
                 
                 if perceptual_loss_fn is not None:
@@ -67,7 +82,7 @@ def compute_losses(noise_pred, noise, denoised_latents=None, target_latents=None
                     metrics['perceptual_loss'] = perceptual_loss
                 
                 if ssim_loss_fn is not None:
-                    ssim_value = ssim_loss_fn(denoised_images, target_images).detach()
+                    ssim_value = ssim_loss_fn(denoised_images.float(), target_images.float()).detach()
                     metrics['ssim_value'] = ssim_value
                     metrics['ssim_loss'] = 1.0 - ssim_value
                 
