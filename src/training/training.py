@@ -3,6 +3,7 @@ from pytorch_lightning import LightningModule
 from pytorch_msssim import SSIM
 from icecream import ic
 from PIL import Image
+import torch.nn.functional as F
 import numpy as np
 import logging
 import wandb
@@ -19,7 +20,6 @@ class MVDLightningModule(LightningModule):
     ):
         super().__init__()
         self.config = config
-        self.debug = True
         self.save_hyperparameters(ignore=['pipeline'])
         
         self.unet = pipeline.unet
@@ -73,13 +73,9 @@ class MVDLightningModule(LightningModule):
 
         source_latents = self.vae.encode(source_images).latent_dist.sample()
         source_latents = source_latents * self.vae.config.scaling_factor
-        if self.debug:
-            ic(source_latents)
         
         target_latents = self.vae.encode(target_images).latent_dist.sample()
         target_latents = target_latents * self.vae.config.scaling_factor
-        if self.debug:
-            ic(target_latents)
         
         prompts = batch['prompt']
         
@@ -91,11 +87,6 @@ class MVDLightningModule(LightningModule):
         if target_camera is not None and hasattr(target_camera, 'to'):
             target_camera = target_camera.to(self.device)
         
-        if self.debug:
-            ic(source_camera)
-        if self.debug:
-            ic(target_camera)
-            
         text_input = self.tokenizer(
             prompts,
             padding="max_length",
@@ -115,16 +106,7 @@ class MVDLightningModule(LightningModule):
             device=self.device
         )
         
-        if self.debug:
-            ic(timesteps)
-        
         noisy_latents = self.scheduler.add_noise(source_latents, noise, timesteps)
-        if self.debug:
-            ic(noisy_latents)
-        
-        alpha_t = self.scheduler.alphas_cumprod[timesteps]
-        if self.debug:
-            ic(alpha_t)
         
         noise_pred = self.unet(
             sample=noisy_latents,
@@ -134,35 +116,14 @@ class MVDLightningModule(LightningModule):
             target_camera=target_camera,
             source_image_latents=source_latents,
         ).sample
-        if self.debug:
-            ic(noise_pred)
-
-        if self.debug:
-            ic(f"timestep_distribution", timesteps.min().item(), timesteps.mean().item(), timesteps.max().item())
         
-        # After getting source_latents
-        if self.debug:
-            ic(f"source_latents_distribution", source_latents.min().item(), source_latents.mean().item(), 
-           source_latents.max().item(), source_latents.std().item())
-        
-        # Track how extreme values evolve
-        if self.global_step % 10 == 0:
-            with torch.no_grad():
-                for name, module in self.vae.named_modules():
-                    if isinstance(module, torch.nn.Conv2d) or isinstance(module, torch.nn.Linear):
-                        if module.weight is not None:
-                            if self.debug:
-                                ic(f"vae_{name}_weight_norm", module.weight.norm().item())
-        
-        # Pass noisy_latents and timesteps for potential metric calculation
-        return noise_pred, noise, target_latents, noisy_latents, timesteps
+        return noise_pred, noise, noisy_latents, timesteps, target_latents, source_latents
     
 
     def training_step(self, batch, batch_idx):
         self.last_batch = batch
         
-        # Unpack the forward pass outputs
-        noise_pred, noise, target_latents, noisy_latents, timesteps = self.forward(batch)
+        noise_pred, noise, noisy_latents, timesteps, target_latents, source_latents = self.forward(batch)
 
         losses = compute_losses(
             noise_pred=noise_pred,
@@ -191,12 +152,11 @@ class MVDLightningModule(LightningModule):
                       for k, v in losses.items() if k != 'decoded_images'}
         self.training_step_outputs.append(step_output)
         
-        return losses['total_loss']
+        return losses['noise_loss']
     
 
     def validation_step(self, batch, batch_idx):
-        # Unpack the forward pass outputs
-        noise_pred, noise, target_latents, noisy_latents, timesteps = self.forward(batch)
+        noise_pred, noise, noisy_latents, timesteps, target_latents, source_latents = self.forward(batch)
         
         losses = compute_losses(
             noise_pred=noise_pred,
@@ -222,9 +182,68 @@ class MVDLightningModule(LightningModule):
                       for k, v in losses.items() if k != 'decoded_images'}
         self.validation_step_outputs.append(step_output)
         
-        self._save_generated_samples(batch, batch_idx, self.current_epoch)
-        
-        return losses['total_loss']
+        generated_images_tensor = None
+        try:
+            with torch.no_grad():
+                source_camera = batch.get('source_camera', None)
+                target_camera = batch.get('target_camera', None)
+                source_images = batch.get('source_image', None)
+                
+                if target_camera is not None and hasattr(target_camera, 'to'):
+                    target_camera = target_camera.to(self.device)
+                
+                if source_camera is not None and hasattr(source_camera, 'to'):
+                    source_camera = source_camera.to(self.device)
+                    
+                if source_images is not None and hasattr(source_images, 'to'):
+                    source_images = source_images.to(self.device)
+                
+                pipeline_output = self.pipeline(
+                    prompt=batch['prompt'],
+                    num_inference_steps=20,
+                    source_camera=source_camera,
+                    target_camera=target_camera,
+                    source_images=source_images,
+                    num_images_per_prompt=1,
+                    guidance_scale = 1.0,
+                    ref_scale = 0.1,
+                    output_type="pt"
+                )
+                generated_images_tensor = pipeline_output["images"]
+                generated_images_tensor = (generated_images_tensor * 2.0 - 1.0).to(self.device)
+
+        except Exception as e:
+            logger.error(f"Error during validation pipeline generation: {e}")
+            return losses['noise_loss']
+
+        if generated_images_tensor is not None:
+            target_images_tensor = batch['target_image'].to(self.device)
+            
+            full_metrics = self._calculate_full_image_metrics(generated_images_tensor, target_images_tensor)
+
+            for name, value in full_metrics.items():
+                self.log(f"val/{name}", value, on_step=False, on_epoch=True)
+            step_output.update(full_metrics)
+
+        if generated_images_tensor is not None:
+            save_dir = self.dirs['samples'] / f"epoch_{self.current_epoch}"
+            save_dir.mkdir(exist_ok=True, parents=True)
+
+            generated_np = ((generated_images_tensor.cpu().permute(0, 2, 3, 1) + 1) / 2 * 255).numpy().astype('uint8')
+            source_np = ((batch['source_image'].cpu().permute(0, 2, 3, 1) + 1) / 2 * 255).numpy().astype('uint8')
+            target_np = ((batch['target_image'].cpu().permute(0, 2, 3, 1) + 1) / 2 * 255).numpy().astype('uint8')
+
+            for i in range(len(generated_np)):
+                base_filename = f'batch_{batch_idx}_sample_{i}'
+                gen_pil, src_pil, tgt_pil = self._save_image_set(
+                    generated_np[i], source_np[i], target_np[i], save_dir, base_filename
+                )
+
+                if batch_idx % 500 == 0:
+                    wandb_key = f"val_samples/epoch_{self.current_epoch}_batch_{batch_idx}_sample_{i}"
+                    self._log_wandb_comparison(gen_pil, src_pil, tgt_pil, wandb_key)
+
+        return losses['noise_loss']
     
 
     def configure_optimizers(self):
@@ -255,95 +274,57 @@ class MVDLightningModule(LightningModule):
         }
     
 
-    def _save_generated_samples(self, batch, batch_idx, epoch):
-        print(f"Saving generated samples for epoch {epoch} in batch {batch_idx}")
-        
-        with torch.no_grad():
-            source_camera = batch.get('source_camera', None)
-            target_camera = batch.get('target_camera', None)
-            source_images = batch.get('source_image', None)
-            
-            # Add detailed logging
-            logger.info(f"Sample generation - prompt: {batch['prompt']}")
-            if source_camera is not None:
-                logger.info(f"Source camera shape: {source_camera.shape}")
-            if target_camera is not None:
-                logger.info(f"Target camera shape: {target_camera.shape}")
-            if source_images is not None:
-                logger.info(f"Source images shape: {source_images.shape}")
-            
-            if target_camera is not None and hasattr(target_camera, 'to'):
-                target_camera = target_camera.to(self.device)
-            
-            if source_camera is not None and hasattr(source_camera, 'to'):
-                source_camera = source_camera.to(self.device)
-                
-            if source_images is not None and hasattr(source_images, 'to'):
-                source_images = source_images.to(self.device)
-            
+    def _calculate_full_image_metrics(self, generated_images_tensor, target_images_tensor):
+        metrics = {}
+        try:
+            with torch.no_grad():
+                gen_img = generated_images_tensor.float()
+                tgt_img = target_images_tensor.float()
+
+                metrics['full_pixel_recon_loss'] = F.mse_loss(gen_img, tgt_img).item()
+
+                if self.perceptual_loss:
+                    metrics['full_perceptual_loss'] = self.perceptual_loss(gen_img, tgt_img).item()
+
+                if self.ssim:
+                    ssim_val = self.ssim(gen_img, tgt_img).item()
+                    metrics['full_ssim_value'] = ssim_val
+                    metrics['full_ssim_loss'] = 1.0 - ssim_val
+
+        except Exception as e:
+            logger.error(f"Error calculating full image metrics: {e}")
+        return metrics
+
+
+    def _save_image_set(self, generated_img_np, source_img_np, target_img_np, save_dir, base_filename):
+        try:
+            source_img = Image.fromarray(source_img_np)
+            target_img = Image.fromarray(target_img_np)
+            generated_img = Image.fromarray(generated_img_np)
+
+            source_img.save(save_dir / f'{base_filename}_source.png')
+            target_img.save(save_dir / f'{base_filename}_target.png')
+            generated_img.save(save_dir / f'{base_filename}_generated.png')
+            return generated_img, source_img, target_img
+        except Exception as e:
+            logger.error(f"Error saving image set {base_filename}: {e}")
+            return None, None, None
+
+    def _log_wandb_comparison(self, generated_img_pil, source_img_pil, target_img_pil, wandb_key):
+        if generated_img_pil and source_img_pil and target_img_pil and self.logger and hasattr(self.logger.experiment, 'log'):
             try:
-                print(f"Generating images for batch {batch_idx} in epoch {epoch}")
-                images = self.pipeline(
-                    prompt=batch['prompt'],
-                    num_inference_steps=20,
-                    source_camera=source_camera,
-                    target_camera=target_camera,
-                    source_images=source_images,
-                    num_images_per_prompt=1,
-                    guidance_scale = 1.0,
-                    ref_scale = 0.1,
-                    output_type="np"
-                )["images"]
-                print(f"Generation was successful for batch {batch_idx} in epoch {epoch}, saving samples")
-                
-                save_dir = self.dirs['samples'] / f"epoch_{epoch}"
-                save_dir.mkdir(exist_ok=True)
-                
-                logger.info(f"Processing batch {batch_idx} in epoch {epoch}")
-                
-                for i, (source, target, generated) in enumerate(zip(
-                    batch['source_image'],
-                    batch['target_image'],
-                    images
-                )):
-                    source_np = ((source.cpu().permute(1, 2, 0) + 1) / 2 * 255).numpy().astype('uint8')
-                    target_np = ((target.cpu().permute(1, 2, 0) + 1) / 2 * 255).numpy().astype('uint8')
-                    
-                    if isinstance(generated, torch.Tensor):
-                        generated_np = (generated.cpu().permute(1, 2, 0) * 255).numpy().astype('uint8')
-                    else:
-                        generated_np = (generated * 255).astype('uint8')
-                    
-                    source_img    = Image.fromarray(source_np)
-                    target_img    = Image.fromarray(target_np)
-                    generated_img = Image.fromarray(generated_np)
-                    
-                    source_img.save(save_dir / f'batch_{batch_idx}_sample_{i}_source.png')
-                    target_img.save(save_dir / f'batch_{batch_idx}_sample_{i}_target.png')
-                    generated_img.save(save_dir / f'batch_{batch_idx}_sample_{i}_generated.png')
-                
-                    
-                    if batch_idx % 500 == 0:
-                        logger.info(f"Logging WandB images for batch {batch_idx}, sample {i}")
-                        wandb.log({
-                            f"samples/epoch_{epoch}_batch_{batch_idx}": [
-                                wandb.Image(source_img, caption=f"Source {i}"),
-                                wandb.Image(target_img, caption=f"Target {i}"),
-                                wandb.Image(generated_img, caption=f"Generated {i}")
-                            ]
-                        })
-                print(f'Saving samples was successful') 
-
+                wandb.log({
+                    wandb_key: [
+                        wandb.Image(source_img_pil, caption="Source"),
+                        wandb.Image(target_img_pil, caption="Target"),
+                        wandb.Image(generated_img_pil, caption="Generated")
+                    ]
+                }, step=self.global_step)
             except Exception as e:
-                logger.error(f"Error in sample generation: {str(e)}")
-                print(f"Prompt: {batch['prompt']}")
-                if source_camera is not None:
-                    print(f"Source camera type: {type(source_camera)}, shape: {source_camera.shape}")
-                if target_camera is not None:
-                    print(f"Target camera type: {type(target_camera)}, shape: {target_camera.shape}")
-                if source_images is not None:
-                    print(f"Source images type: {type(source_images)}, shape: {source_images.shape}") 
-
+                logger.error(f"Error logging WandB comparison {wandb_key}: {e}")
+    
+    
+    
     def on_after_backward(self):
         if self.global_step % self.metrics_log_interval == 0:
             for group_name, params in self.param_groups.items():

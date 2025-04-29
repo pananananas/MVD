@@ -2,12 +2,16 @@ from torchvision.transforms import Normalize
 from torchvision.models import VGG16_Weights
 import torchvision.models as models
 import torch.nn.functional as F
+from icecream import ic
 import torch
 
 class PerceptualLoss:
     def __init__(self, device='cuda'):
         self.vgg = models.vgg16(weights=VGG16_Weights.IMAGENET1K_V1).features[:29].to(device).eval()
-        self.normalize = Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        self.normalize = Normalize(
+            mean=[0.485, 0.456, 0.406], 
+            std=[0.229, 0.224, 0.225]
+        )
         self.device = device
         
         for param in self.vgg.parameters():
@@ -48,7 +52,7 @@ def compute_losses(
     config=None
 ):
     
-    noise_loss = F.mse_loss(noise_pred.float(), noise.float())
+    noise_loss = F.mse_loss(noise_pred, noise)
     total_loss = noise_loss
     
     device = noise_loss.device
@@ -64,33 +68,27 @@ def compute_losses(
     if noisy_latents is not None and timesteps is not None and target_latents is not None and vae is not None and scheduler is not None:
         with torch.no_grad():
             try:
-                alpha_t = scheduler.alphas_cumprod[timesteps].to(device).view(-1, 1, 1, 1)
+                alpha_t = scheduler.alphas_cumprod[timesteps].view(-1, 1, 1, 1).to(device)
                 beta_t = 1.0 - alpha_t
+                
                 denoised_latents = (noisy_latents - beta_t.sqrt() * noise_pred) / alpha_t.sqrt()
-
-                latent_recon_loss = F.mse_loss(denoised_latents.float(), target_latents.float()).detach()
-                metrics['latent_recon_loss'] = latent_recon_loss
+                
+                metrics['latent_recon_loss'] = F.mse_loss(denoised_latents.float(), target_latents.float()).detach()
                 
                 denoised_images = vae.decode(denoised_latents / vae.config.scaling_factor).sample
                 target_images = vae.decode(target_latents / vae.config.scaling_factor).sample
                 
-                pixel_recon_loss = F.mse_loss(denoised_images.float(), target_images.float()).detach()
-                metrics['pixel_recon_loss'] = pixel_recon_loss
+                metrics['pixel_recon_loss'] = F.mse_loss(denoised_images.float(), target_images.float()).detach()
                 
                 if perceptual_loss_fn is not None:
-                    perceptual_loss = perceptual_loss_fn(denoised_images, target_images).detach()
-                    metrics['perceptual_loss'] = perceptual_loss
+                    metrics['perceptual_loss'] = perceptual_loss_fn(denoised_images.float(), target_images.float()).detach()
                 
                 if ssim_loss_fn is not None:
-                    ssim_value = ssim_loss_fn(denoised_images.float(), target_images.float()).detach()
-                    metrics['ssim_value'] = ssim_value
-                    metrics['ssim_loss'] = 1.0 - ssim_value
-                
-                metrics['image_quality'] = (metrics['perceptual_loss'] + metrics['ssim_loss']) / 2
-                
-                metrics['decoded_images'] = {'denoised': denoised_images, 'target': target_images}
+                    ssim_val = ssim_loss_fn(denoised_images.float(), target_images.float()).detach()
+                    metrics['ssim_value'] = ssim_val
+                    metrics['ssim_loss'] = 1.0 - ssim_val
             except Exception as e:
-                print(f"Error computing auxiliary metrics: {str(e)}")
+                ic(f"Exception during auxiliary metric computation: {e}") 
     
     return {
         'total_loss': total_loss,
