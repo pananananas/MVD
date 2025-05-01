@@ -13,14 +13,14 @@ img_ref_scale: 0.2
 cam_modulation_strength: 0.1
 
 # Training parameters
-num_gpus: 2
+num_gpus: 1
 num_workers: 32
 learning_rate: 0.000005
 epochs: 20
 batch_size: 5
 
 val_check_interval: 0.5      # Check every x epochs
-gradient_accumulation_steps: 4
+gradient_accumulation_steps: 8
 max_grad_norm: 1.0
 early_stopping_patience: 20
 max_checkpoints: 10

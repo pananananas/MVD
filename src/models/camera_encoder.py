@@ -166,8 +166,8 @@ class CameraEncoder(nn.Module):
         modulation = self.modulators[modulator_name](camera_embedding)
         scale, shift = modulation.chunk(2, dim=-1)
         
-        ic(f"{modulator_name}_scale", scale)
-        ic(f"{modulator_name}_shift", shift)
+        # ic(f"{modulator_name}_scale", scale)
+        # ic(f"{modulator_name}_shift", shift)
 
         scale = scale.view(scale.shape[0], scale.shape[1], 1, 1)
         shift = shift.view(shift.shape[0], shift.shape[1], 1, 1)
@@ -175,11 +175,11 @@ class CameraEncoder(nn.Module):
         scale = 1.0 + torch.tanh(scale) * 0.1
         
         before_stats = (tensor.min().item(), tensor.mean().item(), tensor.max().item())
-        ic(f"{modulator_name}_tensor_before_modulation", before_stats)
+        # ic(f"{modulator_name}_tensor_before_modulation", before_stats)
         
         modulated = tensor * (1.0 - self.modulation_strength + self.modulation_strength * scale) + self.modulation_strength * shift
         
         after_stats = (modulated.min().item(), modulated.mean().item(), modulated.max().item())
-        ic(f"{modulator_name}_tensor_after_modulation", after_stats)
+        # ic(f"{modulator_name}_tensor_after_modulation", after_stats)
         
         return modulated

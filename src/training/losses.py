@@ -87,6 +87,7 @@ def compute_losses(
                     ssim_val = ssim_loss_fn(denoised_images.float(), target_images.float()).detach()
                     metrics['ssim_value'] = ssim_val
                     metrics['ssim_loss'] = 1.0 - ssim_val
+            
             except Exception as e:
                 ic(f"Exception during auxiliary metric computation: {e}") 
     

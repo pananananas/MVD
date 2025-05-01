@@ -1,5 +1,6 @@
 from typing import Any, Callable, Dict, List, Optional, Union
 from diffusers import StableDiffusionPipeline
+from icecream import ic
 import logging
 import torch
 
@@ -74,6 +75,7 @@ class MVDPipeline(StableDiffusionPipeline):
             
         height = height or self.unet.config.sample_size * self.vae_scale_factor
         width = width or self.unet.config.sample_size * self.vae_scale_factor
+        ic(f"height: {height}, width: {width}")
         
         if latents is None:
             latents = self.prepare_latents(

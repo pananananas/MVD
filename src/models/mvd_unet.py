@@ -176,12 +176,12 @@ class MultiViewUNet(nn.Module):
         camera_embedding = None
         if use_camera_embeddings and target_camera is not None:
             camera_embedding = self.camera_encoder.encode_cameras(source_camera, target_camera)
-            ic(f"camera_embedding_stats", camera_embedding)
+            # ic(f"camera_embedding_stats", camera_embedding)
             self.current_camera_embedding = camera_embedding
             
-            ic(f"sample_before_cam_modulation", sample)
+            # ic(f"sample_before_cam_modulation", sample)
             sample = self.camera_encoder.apply_modulation(sample, "output", camera_embedding)
-            ic(f"sample_after_cam_modulation", sample)
+            # ic(f"sample_after_cam_modulation", sample)
 
         ref_hidden_states = None
         
