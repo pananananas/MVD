@@ -39,7 +39,8 @@ def main(config, cuda, resume_from_checkpoint=None):
         HUGGINGFACE_CACHE = os.path.join(SCRATCH, 'huggingface_cache')
         os.makedirs(HUGGINGFACE_CACHE, exist_ok=True)
         os.environ['HF_HOME'] = HUGGINGFACE_CACHE
-        dataset_path = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/"
+        dataset_path = "/net/pr2/projects/plgrid/plggtattooai/code/eryk/MVD/objaverse/"
+        # dataset_path = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/"
     else:
         dataset_path = "/Users/ewojcik/Code/pwr/MVD/objaverse"
     

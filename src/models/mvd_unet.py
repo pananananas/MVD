@@ -74,8 +74,10 @@ class MultiViewUNet(nn.Module):
             expected_sample_size=expected_sample_size
         ).to(device=self.device, dtype=self.dtype)
         
+        self.hooks = [] # Store hooks to remove them later if needed
+        
         self._init_image_cross_attention()
-        self._register_modulation_hooks()
+        # self._register_modulation_hooks()
 
     def _init_image_cross_attention(self):
         self.attention_layer_map = {}
@@ -173,15 +175,20 @@ class MultiViewUNet(nn.Module):
             repeat_factor = sample.shape[0] // encoder_hidden_states.shape[0]
             encoder_hidden_states = encoder_hidden_states.repeat(repeat_factor, 1, 1)
         
-        camera_embedding = None
+        self.current_camera_embedding = None # Reset embedding
         if use_camera_embeddings and target_camera is not None:
+            self._manage_modulation_hooks(register=True) # Ensure hooks are active
             camera_embedding = self.camera_encoder.encode_cameras(source_camera, target_camera)
-            # ic(f"camera_embedding_stats", camera_embedding)
-            self.current_camera_embedding = camera_embedding
-            
-            # ic(f"sample_before_cam_modulation", sample)
-            sample = self.camera_encoder.apply_modulation(sample, "output", camera_embedding)
-            # ic(f"sample_after_cam_modulation", sample)
+            ic(f"camera_embedding_stats", camera_embedding) # Keep this ic for now
+            self.current_camera_embedding = camera_embedding # Set for hooks
+
+            ic(f"sample_before_cam_modulation", sample)
+            # Apply initial modulation explicitly IF embedding exists
+            if self.current_camera_embedding is not None:
+                 sample = self.camera_encoder.apply_modulation(sample, "output", self.current_camera_embedding)
+            ic(f"sample_after_cam_modulation", sample)
+        else:
+             self._manage_modulation_hooks(register=False) # Ensure hooks are inactive
 
         ref_hidden_states = None
         
@@ -244,20 +251,51 @@ class MultiViewUNet(nn.Module):
         return ref_hidden_states
         
 
-    def _register_modulation_hooks(self):
+    # def _register_modulation_hooks(self):
         
-        def get_hook(idx, direction):
-            def hook(module, inputs, output):
-                return self.camera_encoder.apply_modulation(output, f"{direction}_{idx}", self.current_camera_embedding)
-            return hook
+    #     def get_hook(idx, direction):
+    #         def hook(module, inputs, output):
+    #             return self.camera_encoder.apply_modulation(output, f"{direction}_{idx}", self.current_camera_embedding)
+    #         return hook
         
-        for i, block in enumerate(self.base_unet.down_blocks):
-            block.register_forward_hook(get_hook(i, "down"))
+    #     for i, block in enumerate(self.base_unet.down_blocks):
+    #         block.register_forward_hook(get_hook(i, "down"))
         
-        self.base_unet.mid_block.register_forward_hook(get_hook(0, "mid"))
+    #     self.base_unet.mid_block.register_forward_hook(get_hook(0, "mid"))
         
-        for i, block in enumerate(self.base_unet.up_blocks):
-            block.register_forward_hook(get_hook(i, "up"))
+    #     for i, block in enumerate(self.base_unet.up_blocks):
+    #         block.register_forward_hook(get_hook(i, "up"))
+
+
+    def _manage_modulation_hooks(self, register: bool):
+        if register and not self.hooks:
+            logger.info("Registering modulation hooks...")
+            def get_hook(idx, direction):
+                # Ensure hook uses the current camera embedding AT CALL TIME
+                def hook(module, inputs, output):
+                    # Check if camera embedding exists before applying
+                    if hasattr(self, 'current_camera_embedding') and self.current_camera_embedding is not None:
+                        return self.camera_encoder.apply_modulation(output, f"{direction}_{idx}", self.current_camera_embedding)
+                    return output # Pass through if no valid embedding
+                return hook
+
+            hook_targets = []
+            for i, block in enumerate(self.base_unet.down_blocks):
+                hook_targets.append((block, get_hook(i, "down")))
+            hook_targets.append((self.base_unet.mid_block, get_hook(0, "mid")))
+            for i, block in enumerate(self.base_unet.up_blocks):
+                hook_targets.append((block, get_hook(i, "up")))
+
+            for module, hook_func in hook_targets:
+                self.hooks.append(module.register_forward_hook(hook_func))
+            logger.info(f"Registered {len(self.hooks)} modulation hooks.")
+
+        elif not register and self.hooks:
+            logger.info("Removing modulation hooks...")
+            for handle in self.hooks:
+                handle.remove()
+            self.hooks = []
+            logger.info("Modulation hooks removed.")
 
 
 def create_mvd_pipeline(

@@ -91,6 +91,14 @@ def compute_losses(
             except Exception as e:
                 ic(f"Exception during auxiliary metric computation: {e}") 
     
+        if torch.isnan(noise_pred).any() or torch.isinf(noise_pred).any():
+            ic("NaN/Inf detected in noise_pred!")
+        
+        # if noisy_latents is not None:
+        #     ic(f"Compute Losses Stats:")
+        #     ic(f"  Input:  {noise_pred}, {noise}")
+        #     ic(f"  Latents: {target_latents}, {noisy_latents}")
+
     return {
         'total_loss': total_loss,
         'noise_loss': noise_loss,

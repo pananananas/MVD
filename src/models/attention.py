@@ -1,4 +1,5 @@
 from typing import Optional, Dict, Any
+from icecream import ic
 import torch.nn.functional as F
 import torch.nn as nn
 import logging
@@ -130,6 +131,9 @@ class ImageCrossAttentionProcessor(nn.Module):
                 ref_hidden_states = ref_hidden_states / max(ref_std, 1.0)
 
         safe_ref_scale = min(max(self.ref_scale, 0.0), 0.1)
+        if torch.isnan(self.ref_scale).any():
+             ic(f"Layer {self.name} - NaN detected in ref_scale!")
+        # ic(f"Layer {self.name} - ref_scale value: {self.ref_scale.item():.4f}, safe_ref_scale: {safe_ref_scale:.4f}")
         combined_output = original_output + safe_ref_scale * ref_hidden_states
         
         return combined_output

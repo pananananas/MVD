@@ -55,6 +55,7 @@ class MVDLightningModule(LightningModule):
         self.last_batch = None
 
         self.metrics_log_interval = self.config.get('metrics_log_interval', self.config.get('sample_interval', 10))
+        self.modulation_log_interval = self.config.get('modulation_log_interval', self.metrics_log_interval * 5)
         
         self.monitored_param_groups = ['camera_encoder', 'down_modulators', 'up_modulators', 'mid_modulator']
         
@@ -97,16 +98,16 @@ class MVDLightningModule(LightningModule):
         
         text_embeddings = self.text_encoder(text_input.input_ids)[0]
         
-        noise = torch.randn_like(source_latents)
+        noise = torch.randn_like(target_latents)
         
         timesteps = torch.randint(
             0, 
             self.scheduler.config.num_train_timesteps, 
-            (source_latents.shape[0],), 
+            (target_latents.shape[0],), 
             device=self.device
         )
         
-        noisy_latents = self.scheduler.add_noise(source_latents, noise, timesteps)
+        noisy_latents = self.scheduler.add_noise(target_latents, noise, timesteps)
         
         noise_pred = self.unet(
             sample=noisy_latents,
@@ -142,14 +143,15 @@ class MVDLightningModule(LightningModule):
         
         if batch_idx % self.metrics_log_interval == 0:
             for name, value in losses.items():
-                if name not in ['total_loss', 'noise_loss', 'decoded_images']:
+                if name not in ['total_loss', 'noise_loss']:
+                    log_name = f"train_metrics/{name}"
                     if torch.is_tensor(value):
-                        self.log(f"train_metrics/{name}", value.item(), on_step=True)
+                        self.log(log_name, value.item(), on_step=True)
                     else:
-                        self.log(f"train_metrics/{name}", value, on_step=True)
+                        self.log(log_name, value, on_step=True)
         
         step_output = {k: v.item() if torch.is_tensor(v) else v 
-                      for k, v in losses.items() if k != 'decoded_images'}
+                      for k, v in losses.items()}
         self.training_step_outputs.append(step_output)
         
         return losses['noise_loss']
@@ -172,14 +174,15 @@ class MVDLightningModule(LightningModule):
         )
         
         for name, value in losses.items():
-            if name != 'decoded_images':
+            if name != 'total_loss':
+                log_name = f"val/{name}"
                 if torch.is_tensor(value):
-                    self.log(f"val/{name}", value.item(), on_step=False, on_epoch=True)
+                    self.log(log_name, value.item(), on_step=False, on_epoch=True)
                 else:
-                    self.log(f"val/{name}", value, on_step=False, on_epoch=True)
+                    self.log(log_name, value, on_step=False, on_epoch=True)
         
         step_output = {k: v.item() if torch.is_tensor(v) else v 
-                      for k, v in losses.items() if k != 'decoded_images'}
+                      for k, v in losses.items()}
         self.validation_step_outputs.append(step_output)
         
         generated_images_tensor = None
@@ -239,9 +242,8 @@ class MVDLightningModule(LightningModule):
                     generated_np[i], source_np[i], target_np[i], save_dir, base_filename
                 )
 
-                if batch_idx % 500 == 0:
-                    wandb_key = f"val_samples/epoch_{self.current_epoch}_batch_{batch_idx}_sample_{i}"
-                    self._log_wandb_comparison(gen_pil, src_pil, tgt_pil, wandb_key)
+                if batch_idx % 50 == 0:
+                    self._log_wandb_comparison(gen_pil, src_pil, tgt_pil, self.current_epoch, batch_idx )
 
         return losses['noise_loss']
     
@@ -253,25 +255,26 @@ class MVDLightningModule(LightningModule):
             betas=(0.9, 0.999),
             weight_decay=0.01
         )
+        return optimizer
         
-        warmup_steps = int(0.1 * self.trainer.estimated_stepping_batches)
+        # warmup_steps = int(0.1 * self.trainer.estimated_stepping_batches)
         
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer,
-            max_lr=self.config['learning_rate'],
-            total_steps=self.trainer.estimated_stepping_batches,
-            pct_start=warmup_steps / self.trainer.estimated_stepping_batches,
-            div_factor=25,
-            final_div_factor=10000
-        )
+        # scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        #     optimizer,
+        #     max_lr=self.config['learning_rate'],
+        #     total_steps=self.trainer.estimated_stepping_batches,
+        #     pct_start=warmup_steps / self.trainer.estimated_stepping_batches,
+        #     div_factor=25,
+        #     final_div_factor=10000
+        # )
         
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "interval": "step",
-            },
-        }
+        # return {
+        #     "optimizer": optimizer,
+        #     "lr_scheduler": {
+        #         "scheduler": scheduler,
+        #         "interval": "step",
+        #     },
+        # }
     
 
     def _calculate_full_image_metrics(self, generated_images_tensor, target_images_tensor):
@@ -310,18 +313,18 @@ class MVDLightningModule(LightningModule):
             logger.error(f"Error saving image set {base_filename}: {e}")
             return None, None, None
 
-    def _log_wandb_comparison(self, generated_img_pil, source_img_pil, target_img_pil, wandb_key):
+    def _log_wandb_comparison(self, generated_img_pil, source_img_pil, target_img_pil, epoch, batch_idx):
         if generated_img_pil and source_img_pil and target_img_pil and self.logger and hasattr(self.logger.experiment, 'log'):
             try:
                 wandb.log({
-                    wandb_key: [
+                    f"samples/epoch_{epoch}_batch_{batch_idx}": [
                         wandb.Image(source_img_pil, caption="Source"),
                         wandb.Image(target_img_pil, caption="Target"),
                         wandb.Image(generated_img_pil, caption="Generated")
                     ]
-                }, step=self.global_step)
+                })
             except Exception as e:
-                logger.error(f"Error logging WandB comparison {wandb_key}: {e}")
+                logger.error(f"Error logging WandB comparison at global_step {self.global_step}: {e}")
     
     
     
@@ -350,14 +353,18 @@ class MVDLightningModule(LightningModule):
                         if grad_min < group_grad_min:
                             group_grad_min = grad_min
                         
-                        if self.global_step % (self.metrics_log_interval * 5) == 0:
+                        if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
+                            logger.warning(f"!!! NaN/Inf gradient detected in {name} !!!")
+                            print(f"!!! NaN/Inf gradient detected in {name} !!!")
+                        
+                        if self.global_step % (self.metrics_log_interval * 10) == 0:
                             self.log(f"gradients/{group_name}/{name}_norm", grad_norm, on_step=True)
                             self.log(f"parameters/{group_name}/{name}_norm", param_norm, on_step=True)
                         
-                        if self.global_step % (self.metrics_log_interval * 10) == 0:
+                        if self.global_step % (self.metrics_log_interval * 5) == 0:
                             flat_grads = param.grad.flatten().cpu().numpy()
                             if len(flat_grads) > 1000:
-                                indices = torch.randperm(len(flat_grads))[:1000]
+                                indices = np.random.choice(len(flat_grads), 1000, replace=False)
                                 flat_grads = flat_grads[indices]
                             grad_histogram_values.extend(flat_grads)
                 
@@ -367,28 +374,62 @@ class MVDLightningModule(LightningModule):
                 self.log(f"gradients/{group_name}/min_value", group_grad_min, on_step=True)
                 
                 if self.global_step % (self.metrics_log_interval * 10) == 0 and grad_histogram_values and self.logger:
-                    if hasattr(self.logger, "experiment"):
-                        self.logger.experiment.log({
-                            f"gradients/{group_name}/histogram": wandb.Histogram(
-                                np.array(grad_histogram_values)
-                            ),
-                            "global_step": self.global_step
-                        })
+                    if hasattr(self.logger, "experiment") and hasattr(wandb, "Histogram"):
+                        try:
+                            self.logger.experiment.log({
+                                f"gradients/{group_name}/histogram": wandb.Histogram(
+                                    np.array(grad_histogram_values)
+                                ),
+                                "global_step": self.global_step
+                            })
+                        except Exception as e:
+                            logger.error(f"Failed to log gradient histogram to wandb: {e}")
+            
+            if 'camera_encoder' in self.param_groups:
+                ce_grad_norms = {}
+                for name, param in self.param_groups['camera_encoder']:
+                    if param.grad is not None:
+                        layer_name = name.replace('unet.camera_encoder.', '')
+                        if 'rotation_encoder' in layer_name or \
+                           'translation_encoder' in layer_name or \
+                           'modulators' in layer_name:
+                            ce_grad_norms[f"gradients/camera_encoder/{layer_name}_norm"] = param.grad.norm().item()
+                if ce_grad_norms:
+                    self.log_dict(ce_grad_norms, on_step=True)
             
             for group_name in self.monitored_param_groups:
                 self.grad_norms[group_name] = group_grad_norm
                 self.param_norms[group_name] = group_param_norm
             
             for group_name in self.monitored_param_groups:
-                if group_name in self.grad_norms and group_name in self.param_norms:
-                    grad_to_param_ratio = self.grad_norms[group_name] / (self.param_norms[group_name] + 1e-8)
+                current_group_grad_norm = sum(p.grad.norm().item() for _, p in self.param_groups[group_name] if p.grad is not None)
+                current_group_param_norm = sum(p.norm().item() for _, p in self.param_groups[group_name])
+                
+                if current_group_param_norm > 1e-8:
+                    grad_to_param_ratio = current_group_grad_norm / current_group_param_norm
                     self.log(f"gradients/{group_name}/grad_to_param_ratio", grad_to_param_ratio, on_step=True)
+                else:
+                    self.log(f"gradients/{group_name}/grad_to_param_ratio", 0.0, on_step=True)
             
             if hasattr(self.trainer, "optimizers"):
                 optimizer = self.trainer.optimizers[0]
                 for i, param_group in enumerate(optimizer.param_groups):
                     if "lr" in param_group:
                         self.log(f"optimizer/param_group_{i}_lr", param_group["lr"], on_step=True)
+
+        if self.global_step % self.modulation_log_interval == 0:
+            if hasattr(self.unet, 'camera_encoder') and hasattr(self.unet.camera_encoder, '_current_modulation_stats'):
+                mod_stats = self.unet.camera_encoder._current_modulation_stats
+                if mod_stats:
+                    log_dict = {}
+                    for mod_name, stats in mod_stats.items():
+                        for stat_name, value in stats.items():
+                            log_dict[f"modulation/{mod_name}/{stat_name}"] = value
+
+                    if log_dict:
+                        self.log_dict(log_dict, on_step=True)
+
+                    self.unet.camera_encoder._current_modulation_stats.clear()
 
     def on_train_epoch_end(self):
         avg_metrics = {}

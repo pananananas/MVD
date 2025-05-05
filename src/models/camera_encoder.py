@@ -1,10 +1,10 @@
 import torch.nn.functional as F
+from icecream import ic
+from typing import Dict
 import torch.nn as nn
 import numpy as np
-from icecream import ic
 import logging
 import torch
-from typing import Dict
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,8 @@ class CameraEncoder(nn.Module):
         self.total_steps = 10000
         self.modulation_strength = modulation_strength
         
+        self._current_modulation_stats = {}
+
         logger.info(f"CameraEncoder initialized with modulation_strength={modulation_strength}")
     
 
@@ -54,10 +56,12 @@ class CameraEncoder(nn.Module):
         for name, modulator in self.modulators.items():
             nn.init.zeros_(modulator.weight)
             nn.init.zeros_(modulator.bias)
+            # This init ensures that initially:
+            # raw scale = 0  => tanh(scale) = 0 => scale_processed = 1.0
+            # raw shift = 0  => shift_processed = 0.0
             
-            # Set scale biases to 1.0 (first half) and shift biases to 0.0 (second half)
-            dim = modulator.out_features // 2
-            modulator.bias.data[:dim] = 1.0  # scale initialized to 1
+            # dim = modulator.out_features // 2
+            # modulator.bias.data[:dim] = 1.0  # scale initialized to 1
                 
 
     def compute_relative_transform(self, source_camera: torch.Tensor, target_camera: torch.Tensor) -> Dict[str, torch.Tensor]:
@@ -162,24 +166,45 @@ class CameraEncoder(nn.Module):
     def apply_modulation_to_tensor(self, tensor, modulator_name, camera_embedding):
         if modulator_name not in self.modulators:
             return tensor
-            
+        
+        if camera_embedding is None:
+            ic(f"WARNING: apply_modulation called for {modulator_name} but camera_embedding is None. Skipping modulation.")
+            return tensor
+
         modulation = self.modulators[modulator_name](camera_embedding)
         scale, shift = modulation.chunk(2, dim=-1)
-        
-        # ic(f"{modulator_name}_scale", scale)
-        # ic(f"{modulator_name}_shift", shift)
 
         scale = scale.view(scale.shape[0], scale.shape[1], 1, 1)
         shift = shift.view(shift.shape[0], shift.shape[1], 1, 1)
 
-        scale = 1.0 + torch.tanh(scale) * 0.1
-        
-        before_stats = (tensor.min().item(), tensor.mean().item(), tensor.max().item())
-        # ic(f"{modulator_name}_tensor_before_modulation", before_stats)
-        
-        modulated = tensor * (1.0 - self.modulation_strength + self.modulation_strength * scale) + self.modulation_strength * shift
-        
-        after_stats = (modulated.min().item(), modulated.mean().item(), modulated.max().item())
-        # ic(f"{modulator_name}_tensor_after_modulation", after_stats)
-        
+        scale_processed = 1.0 + torch.tanh(scale) * self.modulation_strength
+        shift_processed = self.modulation_strength * shift
+
+        with torch.no_grad():
+            before_mean = tensor.mean().item()
+            before_std = tensor.std().item()
+
+        modulated = tensor * scale_processed + shift_processed
+
+        with torch.no_grad():
+
+            after_mean = modulated.mean().item()
+            after_std = modulated.std().item()
+            scale_mean = scale_processed.mean().item()
+            scale_std = scale_processed.std().item()
+            shift_mean = shift_processed.mean().item()
+            shift_std = shift_processed.std().item()
+
+        self._current_modulation_stats[modulator_name] = {
+            "before_mean": before_mean,
+            "before_std": before_std,
+            "scale_mean": scale_mean,
+            "scale_std": scale_std,
+            "shift_mean": shift_mean,
+            "shift_std": shift_std,
+            "after_mean": after_mean,
+            "after_std": after_std,
+        }
+
+
         return modulated
