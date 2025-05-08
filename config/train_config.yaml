@@ -9,18 +9,18 @@ use_memory_efficient_attention: true
 enable_gradient_checkpointing: true
 
 # Conditioning parameters
-img_ref_scale: 0.25
+img_ref_scale: 0.5
 cam_modulation_strength: 0.25
 
 # Training parameters
-num_gpus: 1
+num_gpus: 1 
 num_workers: 32
-learning_rate: 0.00001
-epochs: 30
+learning_rate: 0.00005
+epochs: 100
 batch_size: 5
 
 val_check_interval: 0.5      # Check every x epochs
-gradient_accumulation_steps: 2
+gradient_accumulation_steps: 1
 max_grad_norm: 1.0
 early_stopping_patience: 20
 max_checkpoints: 10
@@ -38,7 +38,7 @@ max_samples: 1000       # null for full dataset
 
 # Feature toggles
 use_camera_embeddings: false
-use_image_conditioning: false
+use_image_conditioning: true
 
 # Logging parameters
 modulation_log_interval: 5 
