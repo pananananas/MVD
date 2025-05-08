@@ -23,10 +23,14 @@ class MultiViewUNet(nn.Module):
         enable_gradient_checkpointing: bool = True,
         img_ref_scale: float = 0.3,
         cam_modulation_strength: float = 0.2,
+        use_camera_embeddings: bool = True,
+        use_image_conditioning: bool = True,
     ):
         super().__init__()
         
         use_memory_efficient_attention = True
+        self.use_camera_embeddings = use_camera_embeddings
+        self.use_image_conditioning = use_image_conditioning
         
         self.base_unet = UNet2DConditionModel.from_pretrained(
             pretrained_model_name_or_path,
@@ -61,18 +65,24 @@ class MultiViewUNet(nn.Module):
         
         modulation_hidden_dims["mid"] = mid_channels
         modulation_hidden_dims["output"] = 4
-        
-        self.camera_encoder = CameraEncoder(
-            output_dim=1024, 
-            modulation_hidden_dims=modulation_hidden_dims,
-            modulation_strength=cam_modulation_strength
-        ).to(device=self.device, dtype=self.dtype)
-        
-        self.image_encoder = ImageEncoder(
-            pretrained_model_name_or_path=pretrained_model_name_or_path,
-            dtype=dtype,
-            expected_sample_size=expected_sample_size
-        ).to(device=self.device, dtype=self.dtype)
+
+        if self.use_camera_embeddings:
+            self.camera_encoder = CameraEncoder(
+                output_dim=1024, 
+                modulation_hidden_dims=modulation_hidden_dims,
+                modulation_strength=cam_modulation_strength
+            ).to(device=self.device, dtype=self.dtype)
+        else:
+            self.camera_encoder = None
+
+        if self.use_image_conditioning:
+            self.image_encoder = ImageEncoder(
+                pretrained_model_name_or_path=pretrained_model_name_or_path,
+                dtype=dtype,
+                expected_sample_size=expected_sample_size
+            ).to(device=self.device, dtype=self.dtype)
+        else:
+            self.image_encoder = None
         
         self.hooks = []
         
@@ -144,8 +154,10 @@ class MultiViewUNet(nn.Module):
         if 'dtype' in kwargs:
             self.dtype = dtype
             
-        self.camera_encoder = self.camera_encoder.to(device=device, dtype=dtype)
-        self.image_encoder = self.image_encoder.to(device=device, dtype=dtype)
+        if self.camera_encoder is not None: 
+            self.camera_encoder = self.camera_encoder.to(device=device, dtype=dtype)
+        if self.image_encoder is not None:
+            self.image_encoder = self.image_encoder.to(device=device, dtype=dtype)
         
         return super().to(*args, **kwargs)
 
@@ -162,8 +174,6 @@ class MultiViewUNet(nn.Module):
         timestep_cond: Optional[torch.FloatTensor] = None,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         added_cond_kwargs: Optional[Dict[str, torch.Tensor]] = None,
-        use_camera_embeddings: bool = True,
-        use_image_conditioning: bool = True,
     ):
 
         sample = sample.to(device=self.device, dtype=self.dtype)
@@ -176,18 +186,18 @@ class MultiViewUNet(nn.Module):
         
         self.current_camera_embedding = None # reset embedding
         
-        if use_camera_embeddings and target_camera is not None:
+        if self.use_camera_embeddings and target_camera is not None:
             self._manage_modulation_hooks(register=True)
             self.current_camera_embedding = self.camera_encoder.encode_cameras(source_camera, target_camera)
 
             if self.current_camera_embedding is not None:
-                 sample = self.camera_encoder.apply_modulation(sample, "output", self.current_camera_embedding)
-        else:
-             self._manage_modulation_hooks(register=False)
+                sample = self.camera_encoder.apply_modulation(sample, "output", self.current_camera_embedding)
+        # else:
+            #  self._manage_modulation_hooks(register=False)
 
         ref_hidden_states = None
         
-        if use_image_conditioning and source_image_latents is not None:
+        if self.use_image_conditioning and source_image_latents is not None:
             
             batch_size = source_image_latents.shape[0]
             encoder_timestep = torch.zeros(batch_size, device=self.device).long()
@@ -303,6 +313,8 @@ def create_mvd_pipeline(
         enable_gradient_checkpointing=enable_gradient_checkpointing,
         img_ref_scale=img_ref_scale,
         cam_modulation_strength=cam_modulation_strength,
+        use_camera_embeddings=use_camera_embeddings,
+        use_image_conditioning=use_image_conditioning,
     )
     mv_unet = mv_unet.to(device=device, dtype=dtype)
     pipeline.unet = mv_unet

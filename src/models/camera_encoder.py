@@ -43,8 +43,6 @@ class CameraEncoder(nn.Module):
             
         self.init_modulators()
         
-        self.current_step = 0
-        self.total_steps = 10000
         self.modulation_strength = modulation_strength
         
         self._current_modulation_stats = {}

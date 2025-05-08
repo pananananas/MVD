@@ -8,6 +8,7 @@ import numpy as np
 import logging
 import wandb
 import torch
+from src.models.attention import ImageCrossAttentionProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -29,16 +30,39 @@ class MVDLightningModule(LightningModule):
         self.scheduler = pipeline.scheduler
         self.pipeline = pipeline
         
-        # freeze base UNet
-        for name, param in self.unet.named_parameters():
-            if not any(x in name for x in ['camera_encoder', 'down_modulators', 'up_modulators', 'mid_modulator']):
-                param.requires_grad = False
-        
-        # freeze VAE
+        # 1. Freeze VAE and Text Encoder
         self.vae.requires_grad_(False)
         self.text_encoder.requires_grad_(False)
         self.vae.eval()
         self.text_encoder.eval()
+
+        # 2. Freeze all parameters of self.unet
+        for param in self.unet.parameters():
+            param.requires_grad = False
+
+        # 3. Unfreeze ImageCrossAttentionProcessor
+        if self.unet.use_image_conditioning:
+            
+            found_attn_procs = False
+            for name, module in self.unet.base_unet.named_modules():
+                if hasattr(module, 'processor') and isinstance(module.processor, ImageCrossAttentionProcessor):
+                    found_attn_procs = True
+                    for sub_name, param in module.processor.named_parameters():
+                        param.requires_grad = True
+            if found_attn_procs:
+                ic(f"Finished unfreezing ImageCrossAttentionProcessor parameters. Amount of trainable parameters: {sum(p.numel() for p in self.unet.parameters() if p.requires_grad)}")
+            else:
+                ic("WARNING - No ImageCrossAttentionProcessor instances found in self.unet.base_unet, though image conditioning is ON.")
+        else:
+            ic("Image conditioning is OFF. ImageCrossAttentionProcessors parameters remain frozen.")
+
+        # 4. Unfreeze camera_encoder parameters if it exists and camera embeddings are enabled in MultiViewUNet
+        if self.unet.camera_encoder is not None and self.unet.use_camera_embeddings:
+            ic("Camera embeddings are ON. Attempting to unfreeze self.unet.camera_encoder parameters.")
+            for name, param in self.unet.camera_encoder.named_parameters():
+                param.requires_grad = True
+                # ic(f"  Unfroze camera_encoder.{name}") # Verbose
+            ic(f"Finished unfreezing camera_encoder parameters. Amount of trainable parameters: {sum(p.numel() for p in self.unet.parameters() if p.requires_grad)}")
         
         self.dirs = dirs
         self.comparison_dir = self.dirs['comparisons']
@@ -57,16 +81,24 @@ class MVDLightningModule(LightningModule):
         self.metrics_log_interval = self.config.get('metrics_log_interval', self.config.get('sample_interval', 10))
         self.modulation_log_interval = self.config.get('modulation_log_interval', self.metrics_log_interval * 5)
         
-        self.monitored_param_groups = ['camera_encoder', 'down_modulators', 'up_modulators', 'mid_modulator']
+        self.monitored_param_groups = ['camera_encoder', 'image_attention_processor', 'down_modulators', 'up_modulators', 'mid_modulator']
         
         # store parameters by group for gradient monitoring
         self.param_groups = {group: [] for group in self.monitored_param_groups}
         for name, param in self.unet.named_parameters():
             if param.requires_grad:
-                for group in self.monitored_param_groups:
-                    if group in name:
-                        self.param_groups[group].append((name, param))
-                        break
+                # ic(f"MVDLightningModule.__init__: Found trainable param for param_groups: {name}") # This was commented out by user, keeping it so.
+                if name.startswith('camera_encoder.'): # Check if the parameter name indicates it's from the camera_encoder
+                     self.param_groups['camera_encoder'].append((name, param))
+                elif '.processor.' in name: # Heuristic for ImageCrossAttentionProcessor params
+                     self.param_groups['image_attention_processor'].append((name, param))
+                else: # Fallback for other modulators if they are made trainable and identified by name
+                    for group_name_key in ['down_modulators', 'up_modulators', 'mid_modulator']:
+                        if group_name_key in name:
+                            self.param_groups[group_name_key].append((name, param))
+                            break
+                        
+        ic(f"Populated self.param_groups: {[(group, len(params)) for group, params in self.param_groups.items()]}")
 
     def forward(self, batch):
         source_images = batch['source_image'].to(self.device)
@@ -249,8 +281,22 @@ class MVDLightningModule(LightningModule):
     
 
     def configure_optimizers(self):
+        ic("MVDLightningModule.configure_optimizers: Checking parameters for optimizer.")
+        trainable_params = []
+        for name, param in self.unet.named_parameters():
+            if param.requires_grad:
+                # ic(f"  Found trainable param for optimizer: {name}, shape: {param.shape}") # Verbose
+                trainable_params.append(param)
+            # else:
+            #     ic(f"  Found frozen param, not for optimizer: {name}") # Optional, can be verbose
+        
+        if not trainable_params:
+            ic("!!! No trainable parameters found for the optimizer !!!")
+        else:
+            ic(f"Found {len(trainable_params)} trainable parameters for the optimizer.")
+
         optimizer = torch.optim.AdamW(
-            filter(lambda p: p.requires_grad, self.unet.parameters()),
+            trainable_params,
             lr=self.config['learning_rate'],
             betas=(0.9, 0.999),
             weight_decay=0.01

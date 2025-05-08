@@ -33,6 +33,7 @@ def get_gpu_devices():
         return []
 
 def main(config, cuda, resume_from_checkpoint=None):
+    cuda = False
     if cuda:
         torch.set_float32_matmul_precision('high')
         SCRATCH = os.getenv('SCRATCH', '/net/tscratch/people/plgewoj')
@@ -64,8 +65,8 @@ def main(config, cuda, resume_from_checkpoint=None):
         dtype=getattr(torch, config['torch_dtype']),
         use_memory_efficient_attention=config['use_memory_efficient_attention'],
         enable_gradient_checkpointing=config['enable_gradient_checkpointing'],
-        use_camera_embeddings=config.get('use_camera_embeddings', True),
-        use_image_conditioning=config.get('use_image_conditioning', True),
+        use_camera_embeddings=config.get('use_camera_embeddings'),
+        use_image_conditioning=config.get('use_image_conditioning'),
         img_ref_scale=config.get('img_ref_scale', 0.3),
         cam_modulation_strength=config.get('cam_modulation_strength', 0.2),
         cache_dir=HUGGINGFACE_CACHE if cuda else None,
