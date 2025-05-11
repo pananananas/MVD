@@ -32,7 +32,7 @@ def main(args):
         use_memory_efficient_attention=True,
         enable_gradient_checkpointing=False,
         dtype=torch.float32,
-        use_camera_embeddings=True,
+        use_camera_conditioning=True,
         use_image_conditioning=True,
         cache_dir=cache_dir,
     )

@@ -1,6 +1,6 @@
 # Experiment tracking
 version: v1
-note: "Changed learning rate setup to OneCycleLR"
+note: "simplified attention calculation"
 
 # Model parameters
 architecture: stabilityai/stable-diffusion-2-1
@@ -16,7 +16,7 @@ cam_modulation_strength: 0.25
 num_gpus: 1
 num_workers: 32
 learning_rate: 0.00001
-epochs: 20
+epochs: 50
 batch_size: 8
 
 val_check_interval: 0.5      # Check every x epochs
@@ -37,7 +37,7 @@ max_views_per_object: 8
 max_samples: 1000       # null for full dataset
 
 # Feature toggles
-use_camera_embeddings: false
+use_camera_conditioning: false
 use_image_conditioning: true
 
 # Logging parameters

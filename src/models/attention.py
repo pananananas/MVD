@@ -1,6 +1,6 @@
 from typing import Optional, Dict, Any
-from icecream import ic
 import torch.nn.functional as F
+from icecream import ic
 import torch.nn as nn
 import logging
 import torch
@@ -33,6 +33,8 @@ class ImageCrossAttentionProcessor(nn.Module):
         self.to_k_ref = nn.Linear(query_dim, self.inner_dim, bias=False)
         self.to_v_ref = nn.Linear(query_dim, self.inner_dim, bias=False)
         
+        self.ref_ln = nn.LayerNorm(self.inner_dim)
+
         self.feature_adapter = None
         
         self.to_out_ref = nn.ModuleList([
@@ -40,8 +42,8 @@ class ImageCrossAttentionProcessor(nn.Module):
             nn.Dropout(dropout)
         ])
         
-        self.ref_scale = nn.Parameter(torch.tensor(img_ref_scale))
-    
+        # self.ref_scale = nn.Parameter(torch.tensor(img_ref_scale))
+        self.ref_scale_val = img_ref_scale
 
     def __call__(
         self,
@@ -69,13 +71,18 @@ class ImageCrossAttentionProcessor(nn.Module):
         if ref_hidden_states is None or self.name not in ref_hidden_states:
             return original_output
             
-        reference_states = ref_hidden_states[self.name]
+        reference_states_input = ref_hidden_states[self.name] # Renamed to avoid confusion
         
+        # ic(self.name, "reference_states_input (raw from ImageEncoder)", reference_states_input)
+
         with torch.no_grad():
+            reference_states = reference_states_input.clone()
             reference_states = (reference_states - reference_states.mean(dim=(0, 1), keepdim=True))
             ref_std_tensor = torch.clamp(reference_states.std(dim=(0, 1), keepdim=True), min=1e-6)
             reference_states = reference_states / ref_std_tensor * 0.5
         
+        # ic(self.name, "reference_states (normalized for K,V)", reference_states)
+
         input_ndim = hidden_states.ndim
         if input_ndim == 4:
             batch_size, channel, height, width = hidden_states.shape
@@ -109,37 +116,27 @@ class ImageCrossAttentionProcessor(nn.Module):
         )
         
         # output projection
-        ref_hidden_states = self.to_out_ref[0](ref_attention_output)
-        ref_hidden_states = self.to_out_ref[1](ref_hidden_states)
+        ref_hidden_states_output = self.to_out_ref[0](ref_attention_output)
+        ref_hidden_states_output = self.to_out_ref[1](ref_hidden_states_output)
         
+        # Apply LayerNorm to the output of the reference attention path
+        ref_hidden_states_output = self.ref_ln(ref_hidden_states_output)
+
         if input_ndim == 4:
-            ref_hidden_states = ref_hidden_states.transpose(-1, -2).reshape(
+            batch_size, channel, height, width = hidden_states.shape
+            ref_hidden_states_output = ref_hidden_states_output.transpose(-1, -2).reshape(
                 batch_size, channel, height, width
             )
         
-        with torch.no_grad():
-            orig_mean = original_output.mean().item()
-            orig_std  = original_output.std().item()
-            ref_mean  = ref_hidden_states.mean().item()
-            ref_std   = ref_hidden_states.std().item()
-            ref_scale_value = self.ref_scale.item() if isinstance(self.ref_scale, torch.Tensor) else self.ref_scale
-            
-            logger.debug(f"Layer {self.name} - Original: mean={orig_mean:.4f}, std={orig_std:.4f} | " 
-                         f"Reference: mean={ref_mean:.4f}, std={ref_std:.4f} | Scale: {ref_scale_value:.4f}")
-            
-            if abs(ref_mean) > 0.5 or ref_std > 1.5:
-                ic(f"In attention.py - __call__ in if: abs(ref_mean) > 0.5 or ref_std > 1.5")
-                ic(f"Layer {self.name} - Ref mean: {ref_mean:.4f}, Ref std: {ref_std:.4f}")
-                
-                ref_hidden_states = ref_hidden_states / max(ref_std, 1.0)
+        # ic(self.name, "ref_hidden_states_output (attn out after LayerNorm)", ref_hidden_states_output)
 
-        # safe_ref_scale = min(max(self.ref_scale, 0.0), 0.1)
-        if torch.isnan(self.ref_scale).any():
-             ic(f"Layer {self.name} - NaN detected in ref_scale!")
-        # ic(f"Layer {self.name} - ref_scale value: {self.ref_scale.item():.4f}, safe_ref_scale: {safe_ref_scale:.4f}")
+        scaled_ref_contribution = self.ref_scale_val * ref_hidden_states_output
+        
+        # ic(self.name, "scaled_ref_contribution", scaled_ref_contribution)
 
-
-        combined_output = original_output + self.ref_scale * ref_hidden_states
+        combined_output = original_output + scaled_ref_contribution
+        
+        # ic(self.name, "combined_output", combined_output)
         
         return combined_output
     

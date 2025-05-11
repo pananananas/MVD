@@ -23,13 +23,13 @@ class MultiViewUNet(nn.Module):
         enable_gradient_checkpointing: bool = True,
         img_ref_scale: float = 0.3,
         cam_modulation_strength: float = 0.2,
-        use_camera_embeddings: bool = True,
+        use_camera_conditioning: bool = True,
         use_image_conditioning: bool = True,
     ):
         super().__init__()
         
         use_memory_efficient_attention = True
-        self.use_camera_embeddings = use_camera_embeddings
+        self.use_camera_conditioning = use_camera_conditioning
         self.use_image_conditioning = use_image_conditioning
         
         self.base_unet = UNet2DConditionModel.from_pretrained(
@@ -66,7 +66,7 @@ class MultiViewUNet(nn.Module):
         modulation_hidden_dims["mid"] = mid_channels
         modulation_hidden_dims["output"] = 4
 
-        if self.use_camera_embeddings:
+        if self.use_camera_conditioning:
             self.camera_encoder = CameraEncoder(
                 output_dim=1024, 
                 modulation_hidden_dims=modulation_hidden_dims,
@@ -186,7 +186,7 @@ class MultiViewUNet(nn.Module):
         
         self.current_camera_embedding = None # reset embedding
         
-        if self.use_camera_embeddings and target_camera is not None:
+        if self.use_camera_conditioning and target_camera is not None:
             self._manage_modulation_hooks(register=True)
             self.current_camera_embedding = self.camera_encoder.encode_cameras(source_camera, target_camera)
 
@@ -289,7 +289,7 @@ def create_mvd_pipeline(
     dtype: torch.dtype = torch.float16,
     use_memory_efficient_attention: bool = True,
     enable_gradient_checkpointing: bool = True,
-    use_camera_embeddings: bool = True,
+    use_camera_conditioning: bool = True,
     use_image_conditioning: bool = True,
     img_ref_scale: float = 0.3,
     cam_modulation_strength: float = 0.2,
@@ -313,13 +313,13 @@ def create_mvd_pipeline(
         enable_gradient_checkpointing=enable_gradient_checkpointing,
         img_ref_scale=img_ref_scale,
         cam_modulation_strength=cam_modulation_strength,
-        use_camera_embeddings=use_camera_embeddings,
+        use_camera_conditioning=use_camera_conditioning,
         use_image_conditioning=use_image_conditioning,
     )
     mv_unet = mv_unet.to(device=device, dtype=dtype)
     pipeline.unet = mv_unet
     
-    pipeline.use_camera_embeddings = use_camera_embeddings
+    pipeline.use_camera_conditioning = use_camera_conditioning
     pipeline.use_image_conditioning = use_image_conditioning
     pipeline.img_ref_scale = img_ref_scale
     

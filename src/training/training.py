@@ -57,7 +57,7 @@ class MVDLightningModule(LightningModule):
             ic("Image conditioning is OFF. ImageCrossAttentionProcessors parameters remain frozen.")
 
         # 4. Unfreeze camera_encoder parameters if it exists and camera embeddings are enabled in MultiViewUNet
-        if self.unet.camera_encoder is not None and self.unet.use_camera_embeddings:
+        if self.unet.camera_encoder is not None and self.unet.use_camera_conditioning:
             ic("Camera embeddings are ON. Attempting to unfreeze self.unet.camera_encoder parameters.")
             for name, param in self.unet.camera_encoder.named_parameters():
                 param.requires_grad = True
