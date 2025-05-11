@@ -33,7 +33,6 @@ def get_gpu_devices():
         return []
 
 def main(config, cuda, resume_from_checkpoint=None):
-    cuda = False
     if cuda:
         torch.set_float32_matmul_precision('high')
         SCRATCH = os.getenv('SCRATCH', '/net/tscratch/people/plgewoj')

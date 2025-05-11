@@ -11,8 +11,8 @@ class MVDPipeline(StableDiffusionPipeline):
     def __call__(
         self,
         prompt: Union[str, List[str]] = None,
-        height: Optional[int] = 256,
-        width: Optional[int] = 256,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
         num_inference_steps: int = 50,
         guidance_scale: float = 7.5,
         negative_prompt: Optional[Union[str, List[str]]] = None,
@@ -132,8 +132,6 @@ class MVDPipeline(StableDiffusionPipeline):
                 timestep=t,
                 encoder_hidden_states=prompt_embeds,
                 cross_attention_kwargs=cross_attention_kwargs,
-                use_camera_embeddings=use_camera_embeddings,
-                use_image_conditioning=use_image_conditioning,
                 **extra_kwargs
             ).sample
             

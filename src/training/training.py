@@ -285,10 +285,7 @@ class MVDLightningModule(LightningModule):
         trainable_params = []
         for name, param in self.unet.named_parameters():
             if param.requires_grad:
-                # ic(f"  Found trainable param for optimizer: {name}, shape: {param.shape}") # Verbose
                 trainable_params.append(param)
-            # else:
-            #     ic(f"  Found frozen param, not for optimizer: {name}") # Optional, can be verbose
         
         if not trainable_params:
             ic("!!! No trainable parameters found for the optimizer !!!")
@@ -301,26 +298,28 @@ class MVDLightningModule(LightningModule):
             betas=(0.9, 0.999),
             weight_decay=0.01
         )
-        return optimizer
         
-        # warmup_steps = int(0.1 * self.trainer.estimated_stepping_batches)
+        # return optimizer
         
-        # scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        #     optimizer,
-        #     max_lr=self.config['learning_rate'],
-        #     total_steps=self.trainer.estimated_stepping_batches,
-        #     pct_start=warmup_steps / self.trainer.estimated_stepping_batches,
-        #     div_factor=25,
-        #     final_div_factor=10000
-        # )
+        warmup_steps = int(0.1 * self.trainer.estimated_stepping_batches)
+        ic(f"Total estimated stepping batches for OneCycleLR: {self.trainer.estimated_stepping_batches}, warmup_steps: {warmup_steps}")
         
-        # return {
-        #     "optimizer": optimizer,
-        #     "lr_scheduler": {
-        #         "scheduler": scheduler,
-        #         "interval": "step",
-        #     },
-        # }
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=self.config['learning_rate'],
+            total_steps=self.trainer.estimated_stepping_batches,
+            pct_start=warmup_steps / self.trainer.estimated_stepping_batches,
+            div_factor=25,
+            final_div_factor=10000
+        )
+        
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "step",
+            },
+        }
     
 
     def _calculate_full_image_metrics(self, generated_images_tensor, target_images_tensor):
@@ -363,7 +362,7 @@ class MVDLightningModule(LightningModule):
         if generated_img_pil and source_img_pil and target_img_pil and self.logger and hasattr(self.logger.experiment, 'log'):
             try:
                 wandb.log({
-                    f"samples/epoch_{epoch}_batch_{batch_idx}": [
+                    f"samples/epoch_{epoch:03d}_batch_{batch_idx}": [
                         wandb.Image(source_img_pil, caption="Source"),
                         wandb.Image(target_img_pil, caption="Target"),
                         wandb.Image(generated_img_pil, caption="Generated")
