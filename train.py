@@ -154,7 +154,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description="MVD Training Script")
     parser.add_argument('--config', type=str, default='config/train_config.yaml', help='Path to configuration file')
-    parser.add_argument('--cuda', action='store_false', help='Use CUDA')
+    parser.add_argument('--no_cuda', action='store_false', help='Use CUDA')
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from')
     args = parser.parse_args()
     config = load_config(args.config)
@@ -162,4 +162,4 @@ if __name__ == '__main__':
     if isinstance(config['image_size'], list):
         config['image_size'] = tuple(config['image_size'])
 
-    main(config, args.cuda, resume_from_checkpoint=args.resume)
+    main(config, args.no_cuda, resume_from_checkpoint=args.resume)

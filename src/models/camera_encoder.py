@@ -9,7 +9,7 @@ import torch
 logger = logging.getLogger(__name__)
 
 class CameraEncoder(nn.Module):
-    def __init__(self, output_dim: int = 768, max_freq: int = 10, modulation_hidden_dims: Dict[str, int] = None, modulation_strength: float = 0.2):
+    def __init__(self, output_dim: int = 768, max_freq: int = 10, modulation_hidden_dims: Dict[str, int] = None, modulation_strength: float = 1.0):
         super().__init__()
         self.output_dim = output_dim
         self.max_freq = max_freq
@@ -19,27 +19,43 @@ class CameraEncoder(nn.Module):
         self.rotation_encoder = nn.Sequential(
             nn.Linear(9, 512),  # flattened rotation matrix
             nn.LayerNorm(512),
-            nn.ReLU(),
+            nn.SiLU(),
+            nn.Linear(512, 512),
+            nn.LayerNorm(512),
+            nn.SiLU(),
             nn.Linear(512, output_dim)
         )
         
         self.translation_encoder = nn.Sequential(
-            nn.Linear(output_dim, output_dim),
-            nn.LayerNorm(output_dim),
-            nn.ReLU(),
-            nn.Linear(output_dim, output_dim)
+            nn.Linear(output_dim, 512),  
+            nn.LayerNorm(512),
+            nn.SiLU(),
+            nn.Linear(512, 512),
+            nn.LayerNorm(512),
+            nn.SiLU(),
+            nn.Linear(512, output_dim)
         )
+        
         self.final_projection = nn.Sequential(
             nn.Linear(2 * output_dim, output_dim),
+            nn.LayerNorm(output_dim),
+            nn.SiLU(),
+            nn.Linear(output_dim, output_dim),
             nn.LayerNorm(output_dim)
         )
+        
         self.output_norm = nn.LayerNorm(output_dim)
         
         self.modulation_hidden_dims = modulation_hidden_dims or {}
         
         self.modulators = nn.ModuleDict()
         for name, dim in self.modulation_hidden_dims.items():
-            self.modulators[name] = nn.Linear(output_dim, dim * 2)  # *2 for scale and shift
+            self.modulators[name] = nn.Sequential(
+                nn.Linear(output_dim, output_dim // 2),
+                nn.LayerNorm(output_dim // 2),
+                nn.SiLU(),
+                nn.Linear(output_dim // 2, dim * 2)  # *2 for scale and shift
+            )
             
         self.init_modulators()
         
@@ -52,15 +68,17 @@ class CameraEncoder(nn.Module):
 
     def init_modulators(self):
         for name, modulator in self.modulators.items():
-            nn.init.zeros_(modulator.weight)
-            nn.init.zeros_(modulator.bias)
-            # This init ensures that initially:
-            # raw scale = 0  => tanh(scale) = 0 => scale_processed = 1.0
-            # raw shift = 0  => shift_processed = 0.0
-            
-            # dim = modulator.out_features // 2
-            # modulator.bias.data[:dim] = 1.0  # scale initialized to 1
+            if isinstance(modulator, nn.Sequential):
+                final_layer = modulator[-1]
+            else:
+                final_layer = modulator
                 
+            nn.init.normal_(final_layer.weight, mean=0.0, std=0.02)
+            
+            dim = final_layer.out_features // 2
+            if hasattr(final_layer, 'bias') and final_layer.bias is not None:
+                final_layer.bias.data[:dim].fill_(0.5)
+                final_layer.bias.data[dim:].fill_(0.0)
 
     def compute_relative_transform(self, source_camera: torch.Tensor, target_camera: torch.Tensor) -> Dict[str, torch.Tensor]:
         
@@ -175,8 +193,8 @@ class CameraEncoder(nn.Module):
         scale = scale.view(scale.shape[0], scale.shape[1], 1, 1)
         shift = shift.view(shift.shape[0], shift.shape[1], 1, 1)
 
-        scale_processed = 1.0 + torch.tanh(scale) * self.modulation_strength
-        shift_processed = self.modulation_strength * shift
+        scale_processed = torch.sigmoid(scale) * 2.0 * self.modulation_strength
+        shift_processed = shift * self.modulation_strength
 
         with torch.no_grad():
             before_mean = tensor.mean().item()
