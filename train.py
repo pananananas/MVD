@@ -1,19 +1,21 @@
-from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor, Timer
-from src.data.objaverse_dataset import ObjaverseDataModule
-from pytorch_lightning.strategies import DDPStrategy
-from src.training.training import MVDLightningModule
-from src.models.mvd_unet import create_mvd_pipeline
-from pytorch_lightning.loggers import WandbLogger
-from src.utils import create_output_dirs
-from pytorch_lightning import Trainer
-import lovely_tensors as lt
-from pathlib import Path
-import datetime
 import argparse
-import wandb
+import datetime
+import os
+from pathlib import Path
+
+import lovely_tensors as lt
 import torch
 import yaml
-import os
+from pytorch_lightning import Trainer
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, Timer
+from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.strategies import DDPStrategy
+
+import wandb
+from src.data.objaverse_dataset import ObjaverseDataModule
+from src.models.mvd_unet import create_mvd_pipeline
+from src.training.training import MVDLightningModule
+from src.utils import create_output_dirs
 
 lt.monkey_patch()
 
@@ -42,8 +44,8 @@ def main(config, cuda, resume_from_checkpoint=None):
         HUGGINGFACE_CACHE = os.path.join(SCRATCH, "huggingface_cache")
         os.makedirs(HUGGINGFACE_CACHE, exist_ok=True)
         os.environ["HF_HOME"] = HUGGINGFACE_CACHE
-        dataset_path = "/net/pr2/projects/plgrid/plggtattooai/code/eryk/MVD/objaverse/"
-        # dataset_path = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/"
+        # dataset_path = "/net/pr2/projects/plgrid/plggtattooai/code/eryk/MVD/objaverse/"
+        dataset_path = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/"
     else:
         dataset_path = "/Users/ewojcik/Code/pwr/MVD/objaverse"
 
@@ -163,9 +165,16 @@ if __name__ == "__main__":
         default="config/train_config.yaml",
         help="Path to configuration file",
     )
-    parser.add_argument("--no_cuda", action="store_false", help="Use CUDA")
     parser.add_argument(
-        "--resume", type=str, default=None, help="Path to checkpoint to resume from"
+        "--no_cuda",
+        action="store_false",
+        help="Use CUDA",
+    )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Path to checkpoint to resume from",
     )
     args = parser.parse_args()
     config = load_config(args.config)
