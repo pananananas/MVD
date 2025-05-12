@@ -22,6 +22,17 @@ def create_output_dirs(base_dir):
     return dirs 
 
 
+def log_debug(file_path, message):
+    """Appends a timestamped message to the debug log file."""
+    if file_path:
+        try:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+            with open(file_path, 'a') as f:
+                f.write(f"{timestamp} - {message}\n")
+        except Exception as e:
+            # Avoid crashing the main process due to logging errors
+            print(f"[Debug Log Error] Failed to write to {file_path}: {e}")
+
 def load_image(image_path, target_size=(768, 768)):
     image = Image.open(image_path)
     

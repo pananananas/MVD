@@ -4,6 +4,7 @@ from diffusers import UNet2DConditionModel
 from .camera_encoder import CameraEncoder
 from .image_encoder import ImageEncoder
 from .pipeline import MVDPipeline
+from src.utils import log_debug
 from icecream import ic
 import torch.nn as nn
 import logging
@@ -176,6 +177,20 @@ class MultiViewUNet(nn.Module):
         added_cond_kwargs: Optional[Dict[str, torch.Tensor]] = None,
     ):
 
+        debug_log_file_path = None
+        if cross_attention_kwargs and "debug_log_file_path" in cross_attention_kwargs:
+            debug_log_file_path = cross_attention_kwargs.pop("debug_log_file_path") # Extract and remove to prevent passing to base_unet directly
+
+        log_debug(debug_log_file_path, "MultiViewUNet.forward invoked")
+        log_debug(debug_log_file_path, f"  use_camera_conditioning: {self.use_camera_conditioning}")
+        log_debug(debug_log_file_path, f"  use_image_conditioning: {self.use_image_conditioning}")
+        log_debug(debug_log_file_path, f"  sample shape: {sample.shape}, mean: {sample.mean():.4f}, std: {sample.std():.4f}")
+        log_debug(debug_log_file_path, f"  timestep: {timestep}")
+        log_debug(debug_log_file_path, f"  encoder_hidden_states shape: {encoder_hidden_states.shape}")
+        log_debug(debug_log_file_path, f"  source_camera is {'provided' if source_camera is not None else 'None'}")
+        log_debug(debug_log_file_path, f"  target_camera is {'provided' if target_camera is not None else 'None'}")
+        log_debug(debug_log_file_path, f"  source_image_latents is {'provided' if source_image_latents is not None else 'None'}")
+
         sample = sample.to(device=self.device, dtype=self.dtype)
         timestep = timestep.to(device=self.device)
         encoder_hidden_states = encoder_hidden_states.to(device=self.device)
@@ -187,18 +202,23 @@ class MultiViewUNet(nn.Module):
         self.current_camera_embedding = None # reset embedding
         
         if self.use_camera_conditioning and target_camera is not None:
+            log_debug(debug_log_file_path, "  Camera conditioning is ON and target_camera is provided")
             self._manage_modulation_hooks(register=True)
             self.current_camera_embedding = self.camera_encoder.encode_cameras(source_camera, target_camera)
 
             if self.current_camera_embedding is not None:
+                log_debug(debug_log_file_path, "    Applying camera modulation to initial sample")
                 sample = self.camera_encoder.apply_modulation(sample, "output", self.current_camera_embedding)
+        else:
+            log_debug(debug_log_file_path, "  Camera conditioning is OFF or target_camera is None")
         # else:
             #  self._manage_modulation_hooks(register=False)
 
         ref_hidden_states = None
         
         if self.use_image_conditioning and source_image_latents is not None:
-            
+            log_debug(debug_log_file_path, "  Image conditioning is ON and source_image_latents is provided")
+
             batch_size = source_image_latents.shape[0]
             encoder_timestep = torch.zeros(batch_size, device=self.device).long()
             
@@ -215,11 +235,18 @@ class MultiViewUNet(nn.Module):
                 timestep=encoder_timestep
             )
             
+            log_debug(debug_log_file_path, "    Computed image_features from image_encoder")
             ref_hidden_states = self._map_image_features_to_attention_layers(image_features)
-        
+            log_debug(debug_log_file_path, "    Mapped image_features to ref_hidden_states for attention layers")
+        else:
+            log_debug(debug_log_file_path, "  Image conditioning is OFF or source_image_latents is None")
+
         if cross_attention_kwargs is None:
             cross_attention_kwargs = {}
-            
+
+        if debug_log_file_path: # Pass along for attention processors
+            cross_attention_kwargs["debug_log_file_path"] = debug_log_file_path
+
         if ref_hidden_states is not None:
             cross_attention_kwargs["ref_hidden_states"] = ref_hidden_states
         
@@ -235,6 +262,8 @@ class MultiViewUNet(nn.Module):
         
         hidden_states = output.sample
         
+        log_debug(debug_log_file_path, f"  MultiViewUNet output.sample stats: mean={hidden_states.mean():.4f}, std={hidden_states.std():.4f}, min={hidden_states.min():.4f}, max={hidden_states.max():.4f}")
+
         if not return_dict:
             return hidden_states
             

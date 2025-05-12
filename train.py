@@ -33,7 +33,6 @@ def get_gpu_devices():
         return []
 
 def main(config, cuda, resume_from_checkpoint=None):
-    cuda = False
     if cuda:
         torch.set_float32_matmul_precision('high')
         SCRATCH = os.getenv('SCRATCH', '/net/tscratch/people/plgewoj')
@@ -73,11 +72,13 @@ def main(config, cuda, resume_from_checkpoint=None):
     )
 
     dirs = create_output_dirs("outputs")
+    debug_log_file_path = dirs["logs"] / "val_debug_logs.txt"
 
     model = MVDLightningModule(
         pipeline=pipeline,
         config=config,
-        dirs=dirs
+        dirs=dirs,
+        debug_log_file_path=str(debug_log_file_path)
     )
     
     checkpoint_callback = ModelCheckpoint(

@@ -1,4 +1,5 @@
 from typing import Optional, Dict, Any
+from src.utils import log_debug
 import torch.nn.functional as F
 from icecream import ic
 import torch.nn as nn
@@ -58,6 +59,8 @@ class ImageCrossAttentionProcessor(nn.Module):
         **kwargs
     ) -> torch.FloatTensor:
 
+        debug_log_file_path = kwargs.pop("debug_log_file_path", None)
+
         original_output = self.original_processor(
             attn, 
             hidden_states, 
@@ -69,11 +72,16 @@ class ImageCrossAttentionProcessor(nn.Module):
         )
         
         if ref_hidden_states is None or self.name not in ref_hidden_states:
+            if not hasattr(self, '_logged_ref_missing'): self._logged_ref_missing = set()
+            if 'validation' not in self._logged_ref_missing:
+                log_debug(debug_log_file_path, f"{self.name}: ref_hidden_states is None or key missing. Skipping ref attention.")
+                self._logged_ref_missing.add('validation')
             return original_output
             
         reference_states_input = ref_hidden_states[self.name] # Renamed to avoid confusion
         
-        # ic(self.name, "reference_states_input (raw from ImageEncoder)", reference_states_input)
+        log_debug(debug_log_file_path, f"{self.name}: Received ref_hidden_states during call")
+        log_debug(debug_log_file_path, f"{self.name}: reference_states_input (raw) stats: mean={reference_states_input.mean():.4f}, std={reference_states_input.std():.4f}")
 
         with torch.no_grad():
             reference_states = reference_states_input.clone()
@@ -81,7 +89,7 @@ class ImageCrossAttentionProcessor(nn.Module):
             ref_std_tensor = torch.clamp(reference_states.std(dim=(0, 1), keepdim=True), min=1e-6)
             reference_states = reference_states / ref_std_tensor * 0.5
         
-        # ic(self.name, "reference_states (normalized for K,V)", reference_states)
+        log_debug(debug_log_file_path, f"{self.name}: reference_states (normalized for K,V) stats: mean={reference_states.mean():.4f}, std={reference_states.std():.4f}")
 
         input_ndim = hidden_states.ndim
         if input_ndim == 4:
@@ -103,6 +111,10 @@ class ImageCrossAttentionProcessor(nn.Module):
         value = self.to_v_ref(reference_states)
         value = value.view(batch_size, -1, self.heads, self.dim_head).transpose(1, 2)
         
+        log_debug(debug_log_file_path, f"{self.name}: query stats: mean={query.mean():.4f}, std={query.std():.4f}")
+        log_debug(debug_log_file_path, f"{self.name}: key stats (after to_k_ref): mean={key.mean():.4f}, std={key.std():.4f}")
+        log_debug(debug_log_file_path, f"{self.name}: value stats (after to_v_ref): mean={value.mean():.4f}, std={value.std():.4f}")
+
         # compute cross-attention
         ref_attention_output = F.scaled_dot_product_attention(
             query, key, value, 
@@ -128,15 +140,15 @@ class ImageCrossAttentionProcessor(nn.Module):
                 batch_size, channel, height, width
             )
         
-        # ic(self.name, "ref_hidden_states_output (attn out after LayerNorm)", ref_hidden_states_output)
+        log_debug(debug_log_file_path, f"{self.name}: ref_hidden_states_output (attn out after LayerNorm) stats: mean={ref_hidden_states_output.mean():.4f}, std={ref_hidden_states_output.std():.4f}")
 
         scaled_ref_contribution = self.ref_scale_val * ref_hidden_states_output
         
-        # ic(self.name, "scaled_ref_contribution", scaled_ref_contribution)
+        log_debug(debug_log_file_path, f"{self.name}: scaled_ref_contribution ({self.ref_scale_val=}) stats: mean={scaled_ref_contribution.mean():.4f}, std={scaled_ref_contribution.std():.4f}")
 
         combined_output = original_output + scaled_ref_contribution
         
-        # ic(self.name, "combined_output", combined_output)
+        log_debug(debug_log_file_path, f"{self.name}: combined_output stats: mean={combined_output.mean():.4f}, std={combined_output.std():.4f}")
         
         return combined_output
     

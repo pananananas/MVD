@@ -1,14 +1,15 @@
+from src.models.attention import ImageCrossAttentionProcessor
 from .losses import PerceptualLoss, compute_losses
 from pytorch_lightning import LightningModule
 from pytorch_msssim import SSIM
+import torch.nn.functional as F
+from typing import Optional
 from icecream import ic
 from PIL import Image
-import torch.nn.functional as F
 import numpy as np
 import logging
 import wandb
 import torch
-from src.models.attention import ImageCrossAttentionProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -17,11 +18,14 @@ class MVDLightningModule(LightningModule):
         self,
         pipeline,
         config,
-        dirs
+        dirs,
+        debug_log_file_path: Optional[str] = None,
     ):
         super().__init__()
         self.config = config
         self.save_hyperparameters(ignore=['pipeline'])
+        
+        self.debug_log_file_path = debug_log_file_path
         
         self.unet = pipeline.unet
         self.vae = pipeline.vae
@@ -38,7 +42,7 @@ class MVDLightningModule(LightningModule):
 
         # 2. Freeze all parameters of self.unet
         for param in self.unet.parameters():
-            param.requires_grad = False
+            param.requires_grad = True
 
         # 3. Unfreeze ImageCrossAttentionProcessor
         if self.unet.use_image_conditioning:
@@ -218,7 +222,16 @@ class MVDLightningModule(LightningModule):
         self.validation_step_outputs.append(step_output)
         
         generated_images_tensor = None
+
         try:
+            self.unet.eval()
+            self.vae.eval()
+            self.text_encoder.eval()
+            if hasattr(self.unet, 'image_encoder') and self.unet.image_encoder is not None:
+                self.unet.image_encoder.eval()
+            if hasattr(self.unet, 'camera_encoder') and self.unet.camera_encoder is not None:
+                self.unet.camera_encoder.eval()
+
             with torch.no_grad():
                 source_camera = batch.get('source_camera', None)
                 target_camera = batch.get('target_camera', None)
@@ -242,7 +255,10 @@ class MVDLightningModule(LightningModule):
                     num_images_per_prompt=1,
                     guidance_scale = 1.0,
                     ref_scale = 0.1,
-                    output_type="pt"
+                    output_type="pt",
+                    use_camera_embeddings=self.unet.use_camera_conditioning,
+                    use_image_conditioning=self.unet.use_image_conditioning,
+                    debug_log_file_path=self.debug_log_file_path
                 )
                 generated_images_tensor = pipeline_output["images"]
                 generated_images_tensor = (generated_images_tensor * 2.0 - 1.0).to(self.device)
@@ -299,27 +315,27 @@ class MVDLightningModule(LightningModule):
             weight_decay=0.01
         )
         
-        # return optimizer
+        return optimizer
         
-        warmup_steps = int(0.1 * self.trainer.estimated_stepping_batches)
-        ic(f"Total estimated stepping batches for OneCycleLR: {self.trainer.estimated_stepping_batches}, warmup_steps: {warmup_steps}")
+        # warmup_steps = int(0.1 * self.trainer.estimated_stepping_batches)
+        # ic(f"Total estimated stepping batches for OneCycleLR: {self.trainer.estimated_stepping_batches}, warmup_steps: {warmup_steps}")
         
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer,
-            max_lr=self.config['learning_rate'],
-            total_steps=self.trainer.estimated_stepping_batches,
-            pct_start=warmup_steps / self.trainer.estimated_stepping_batches,
-            div_factor=25,
-            final_div_factor=10000
-        )
+        # scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        #     optimizer,
+        #     max_lr=self.config['learning_rate'],
+        #     total_steps=self.trainer.estimated_stepping_batches,
+        #     pct_start=warmup_steps / self.trainer.estimated_stepping_batches,
+        #     div_factor=25,
+        #     final_div_factor=10000
+        # )
         
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "interval": "step",
-            },
-        }
+        # return {
+        #     "optimizer": optimizer,
+        #     "lr_scheduler": {
+        #         "scheduler": scheduler,
+        #         "interval": "step",
+        #     },
+        # }
     
 
     def _calculate_full_image_metrics(self, generated_images_tensor, target_images_tensor):
