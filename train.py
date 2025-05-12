@@ -74,6 +74,7 @@ def main(config, cuda, resume_from_checkpoint=None):
         img_ref_scale=config.get("img_ref_scale", 0.3),
         cam_modulation_strength=config.get("cam_modulation_strength", 0.2),
         cache_dir=HUGGINGFACE_CACHE if cuda else None,
+        scheduler_config=config.get("scheduler_config"),
     )
 
     dirs = create_output_dirs("outputs")
