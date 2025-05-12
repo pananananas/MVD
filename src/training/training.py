@@ -41,8 +41,12 @@ class MVDLightningModule(LightningModule):
         self.text_encoder.eval()
 
         # 2. Freeze all parameters of self.unet
-        for param in self.unet.parameters():
-            param.requires_grad = True
+        if not self.config.get('train_denoising_unet', False):
+            for param in self.unet.parameters():
+                param.requires_grad = False
+        else:
+            for param in self.unet.parameters():
+                param.requires_grad = True
 
         # 3. Unfreeze ImageCrossAttentionProcessor
         if self.unet.use_image_conditioning:
@@ -378,7 +382,7 @@ class MVDLightningModule(LightningModule):
         if generated_img_pil and source_img_pil and target_img_pil and self.logger and hasattr(self.logger.experiment, 'log'):
             try:
                 wandb.log({
-                    f"samples/epoch_{epoch:03d}_batch_{batch_idx}": [
+                    f"samples/epoch_{epoch:03d}_batch_{batch_idx:04d}": [
                         wandb.Image(source_img_pil, caption="Source"),
                         wandb.Image(target_img_pil, caption="Target"),
                         wandb.Image(generated_img_pil, caption="Generated")

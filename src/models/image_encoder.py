@@ -1,8 +1,7 @@
 from diffusers import UNet2DConditionModel
 import torch.nn as nn
-import torch
 import logging
-import torch.nn.functional as F
+import torch
 
 logger = logging.getLogger(__name__)
 

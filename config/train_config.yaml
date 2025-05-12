@@ -1,6 +1,6 @@
 # Experiment tracking
 version: v1
-note: "detailed debug"
+note: "bigger dataset"
 
 # Model parameters
 architecture: stabilityai/stable-diffusion-2-1
@@ -15,7 +15,7 @@ cam_modulation_strength: 0.25
 # Training parameters
 num_gpus: 1
 num_workers: 16
-learning_rate: 0.000003
+learning_rate: 0.000005
 epochs: 20
 batch_size: 4
 
@@ -39,6 +39,7 @@ max_samples: 1000       # null for full dataset
 # Feature toggles
 use_camera_conditioning: false
 use_image_conditioning: false
+train_denoising_unet: true
 
 # Logging parameters
 modulation_log_interval: 5 

@@ -1,7 +1,7 @@
 from typing import Any, Callable, Dict, List, Optional, Union
 from diffusers import StableDiffusionPipeline
 from src.utils import log_debug
-from icecream import ic
+# from icecream import ic
 import logging
 import torch
 
