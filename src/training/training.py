@@ -35,6 +35,8 @@ class MVDLightningModule(LightningModule):
         self.scheduler = pipeline.scheduler
         self.pipeline = pipeline
 
+        self.base_scheduler = getattr(pipeline, "scheduler", None)
+
         # 1. Freeze VAE and Text Encoder
         self.vae.requires_grad_(False)
         self.text_encoder.requires_grad_(False)
@@ -214,6 +216,7 @@ class MVDLightningModule(LightningModule):
             target_latents=target_latents,
             vae=self.vae,
             scheduler=self.scheduler,
+            base_scheduler_for_snr_calc=self.base_scheduler_for_snr_calc,
             perceptual_loss_fn=self.perceptual_loss,
             ssim_loss_fn=self.ssim,
             config=self.config,
@@ -248,6 +251,7 @@ class MVDLightningModule(LightningModule):
             target_latents=target_latents,
             vae=self.vae,
             scheduler=self.scheduler,
+            base_scheduler_for_snr_calc=self.base_scheduler_for_snr_calc,
             perceptual_loss_fn=self.perceptual_loss,
             ssim_loss_fn=self.ssim,
             config=self.config,

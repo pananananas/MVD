@@ -403,20 +403,20 @@ def create_mvd_pipeline(
         cache_dir=cache_dir,
     )
 
-    if scheduler_config and scheduler_config.get("use_shifted_snr_scheduler", False):
-        base_scheduler = DDPMScheduler.from_config(pipeline.scheduler.config)
-        shift_mode = scheduler_config.get("shift_noise_mode", "interpolated")
-        shift_scale = scheduler_config.get("shift_noise_scale", 1.0)
+    # if scheduler_config and scheduler_config.get("use_shifted_snr_scheduler", False):
+    base_scheduler = DDPMScheduler.from_config(pipeline.scheduler.config)
+    shift_mode = scheduler_config.get("shift_noise_mode", "interpolated")
+    shift_scale = scheduler_config.get("shift_noise_scale", 1.0)
 
-        pipeline.scheduler = ShiftSNRScheduler.from_scheduler(
-            noise_scheduler=base_scheduler,
-            shift_mode=shift_mode,
-            shift_scale=shift_scale,
-            scheduler_class=DDPMScheduler,
-        )
-        ic(
-            f"Replaced default scheduler with ShiftSNRScheduler (mode={shift_mode}, scale={shift_scale})"
-        )
+    pipeline.scheduler = ShiftSNRScheduler.from_scheduler(
+        noise_scheduler=base_scheduler,
+        shift_mode=shift_mode,
+        shift_scale=shift_scale,
+        scheduler_class=DDPMScheduler,
+    )
+    ic(
+        f"Replaced default scheduler with ShiftSNRScheduler (mode={shift_mode}, scale={shift_scale})"
+    )
 
     pipeline.safety_checker = None
     pipeline.feature_extractor = None
