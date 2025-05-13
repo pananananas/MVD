@@ -155,12 +155,12 @@ if __name__ == "__main__":
     Compare the alpha values for different noise schedulers.
     """
     import matplotlib.pyplot as plt
-    from diffusers import DDPMScheduler
+    from diffusers import DPMSolverMultistepScheduler
 
 
     # Base
     timesteps = torch.arange(0, 1000)
-    noise_scheduler_base = DDPMScheduler.from_pretrained(
+    noise_scheduler_base = DPMSolverMultistepScheduler.from_pretrained(
         "runwayml/stable-diffusion-v1-5", subfolder="scheduler"
     )
     alpha = compute_alpha(timesteps, noise_scheduler_base)
@@ -170,7 +170,7 @@ if __name__ == "__main__":
     num_train_timesteps_ = 1100
     timesteps_ = torch.arange(0, num_train_timesteps_)
     noise_kwargs = {"beta_end": 0.014, "num_train_timesteps": num_train_timesteps_}
-    noise_scheduler_kolors = DDPMScheduler.from_config(
+    noise_scheduler_kolors = DPMSolverMultistepScheduler.from_config(
         noise_scheduler_base.config, **noise_kwargs
     )
     alpha = compute_alpha(timesteps_, noise_scheduler_kolors)
@@ -192,7 +192,7 @@ if __name__ == "__main__":
     plt.plot(timesteps.numpy(), alpha.numpy(), label="Interpolated (scale 8.0)")
 
     # ZeroSNR
-    noise_scheduler = DDPMScheduler.from_config(
+    noise_scheduler = DPMSolverMultistepScheduler.from_config(
         noise_scheduler_base.config, rescale_betas_zero_snr=True
     )
     alpha = compute_alpha(timesteps, noise_scheduler)

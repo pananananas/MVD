@@ -1,7 +1,7 @@
 from src.models.attention import ImageCrossAttentionProcessor
 from .losses import PerceptualLoss, compute_losses
 from pytorch_lightning import LightningModule
-from diffusers import DDPMScheduler
+from diffusers import DPMSolverMultistepScheduler
 from pytorch_msssim import SSIM
 import torch.nn.functional as F
 from typing import Optional
@@ -33,10 +33,10 @@ class MVDLightningModule(LightningModule):
         self.vae = pipeline.vae
         self.text_encoder = pipeline.text_encoder
         self.tokenizer = pipeline.tokenizer
-        self.scheduler = DDPMScheduler.from_config(pipeline.scheduler.config)
+        self.scheduler = DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config)
         self.pipeline = pipeline
 
-        self.base_scheduler = DDPMScheduler.from_config(pipeline.scheduler.config)
+        self.base_scheduler = DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config)
 
         # 1. Freeze VAE and Text Encoder
         self.vae.requires_grad_(False)
@@ -99,7 +99,6 @@ class MVDLightningModule(LightningModule):
 
         self.grad_norms = {}
         self.param_norms = {}
-        self.last_batch = None
 
         self.metrics_log_interval = self.config.get(
             "metrics_log_interval", self.config.get("sample_interval", 10)
@@ -203,8 +202,6 @@ class MVDLightningModule(LightningModule):
         )
 
     def training_step(self, batch, batch_idx):
-        self.last_batch = batch
-
         noise_pred, noise, noisy_latents, timesteps, target_latents, source_latents = (
             self.forward(batch)
         )

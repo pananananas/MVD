@@ -4,7 +4,7 @@ from typing import Optional, Dict, Any, NamedTuple
 from diffusers import UNet2DConditionModel
 from .camera_encoder import CameraEncoder
 from .image_encoder import ImageEncoder
-from diffusers import DDPMScheduler
+from diffusers import DPMSolverMultistepScheduler
 from .pipeline import MVDPipeline
 from src.utils import log_debug
 from icecream import ic
@@ -404,7 +404,7 @@ def create_mvd_pipeline(
     )
 
     # if scheduler_config and scheduler_config.get("use_shifted_snr_scheduler", False):
-    base_scheduler = DDPMScheduler.from_config(pipeline.scheduler.config)
+    base_scheduler = DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config)
     shift_mode = scheduler_config.get("shift_noise_mode", "interpolated")
     shift_scale = scheduler_config.get("shift_noise_scale", 1.0)
 
@@ -412,7 +412,7 @@ def create_mvd_pipeline(
         noise_scheduler=base_scheduler,
         shift_mode=shift_mode,
         shift_scale=shift_scale,
-        scheduler_class=DDPMScheduler,
+        scheduler_class=DPMSolverMultistepScheduler,
     )
     ic(
         f"Replaced default scheduler with ShiftSNRScheduler (mode={shift_mode}, scale={shift_scale})"
