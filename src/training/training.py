@@ -1,6 +1,7 @@
 from src.models.attention import ImageCrossAttentionProcessor
 from .losses import PerceptualLoss, compute_losses
 from pytorch_lightning import LightningModule
+from diffusers import DDPMScheduler
 from pytorch_msssim import SSIM
 import torch.nn.functional as F
 from typing import Optional
@@ -32,10 +33,10 @@ class MVDLightningModule(LightningModule):
         self.vae = pipeline.vae
         self.text_encoder = pipeline.text_encoder
         self.tokenizer = pipeline.tokenizer
-        self.scheduler = pipeline.scheduler
+        self.scheduler = DDPMScheduler.from_config(pipeline.scheduler.config)
         self.pipeline = pipeline
 
-        self.base_scheduler = getattr(pipeline, "scheduler", None)
+        self.base_scheduler = DDPMScheduler.from_config(pipeline.scheduler.config)
 
         # 1. Freeze VAE and Text Encoder
         self.vae.requires_grad_(False)
@@ -216,7 +217,7 @@ class MVDLightningModule(LightningModule):
             target_latents=target_latents,
             vae=self.vae,
             scheduler=self.scheduler,
-            base_scheduler_for_snr_calc=self.base_scheduler_for_snr_calc,
+            base_scheduler=self.base_scheduler,
             perceptual_loss_fn=self.perceptual_loss,
             ssim_loss_fn=self.ssim,
             config=self.config,
@@ -251,7 +252,7 @@ class MVDLightningModule(LightningModule):
             target_latents=target_latents,
             vae=self.vae,
             scheduler=self.scheduler,
-            base_scheduler_for_snr_calc=self.base_scheduler_for_snr_calc,
+            base_scheduler=self.base_scheduler,
             perceptual_loss_fn=self.perceptual_loss,
             ssim_loss_fn=self.ssim,
             config=self.config,

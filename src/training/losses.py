@@ -58,10 +58,8 @@ def compute_losses(
     ssim_loss_fn=None,
     config=None,
 ):
-    # Calculate base MSE loss per element
     noise_loss_per_element = F.mse_loss(noise_pred, noise, reduction="none")
 
-    # Check if SNR loss weighting should be applied
     loss_config = config.get("loss_config", {})
     # use_snr = loss_config.get("use_snr_loss", False)
 
