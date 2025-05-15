@@ -1,6 +1,6 @@
 # Experiment tracking
 version: v1
-note: "SNR loss and shifted noise schedule"
+note: "loss pred fixed, training on small dataset, full fine tuning with image conditioning"
 
 # Model parameters
 architecture: stabilityai/stable-diffusion-2-1
@@ -9,18 +9,18 @@ use_memory_efficient_attention: true
 enable_gradient_checkpointing: true
 
 # Conditioning parameters
-img_ref_scale: 0.1
+img_ref_scale: 0.25
 cam_modulation_strength: 0.25
 
 # Training parameters
 num_gpus: 1
 num_workers: 16
-learning_rate: 0.00005
-epochs: 20
-batch_size: 6
+learning_rate: 0.00001
+epochs: 50
+batch_size: 4
 
 val_check_interval: 0.5 # Check every x epochs
-gradient_accumulation_steps: 8
+gradient_accumulation_steps: 4
 max_grad_norm: 1.0
 early_stopping_patience: 20
 max_checkpoints: 10
@@ -39,7 +39,7 @@ max_samples: 1000 # null for full dataset
 # Feature toggles
 use_camera_conditioning: false
 use_image_conditioning: true
-train_denoising_unet: false
+train_denoising_unet: true
 
 # Logging parameters
 modulation_log_interval: 5

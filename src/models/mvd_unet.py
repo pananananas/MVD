@@ -4,7 +4,7 @@ from typing import Optional, Dict, Any, NamedTuple
 from diffusers import UNet2DConditionModel
 from .camera_encoder import CameraEncoder
 from .image_encoder import ImageEncoder
-from diffusers import DPMSolverMultistepScheduler
+from diffusers import DDPMScheduler
 from .pipeline import MVDPipeline
 from src.utils import log_debug
 from icecream import ic
@@ -403,20 +403,18 @@ def create_mvd_pipeline(
         cache_dir=cache_dir,
     )
 
-    # if scheduler_config and scheduler_config.get("use_shifted_snr_scheduler", False):
-    base_scheduler = DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config)
-    shift_mode = scheduler_config.get("shift_noise_mode", "interpolated")
-    shift_scale = scheduler_config.get("shift_noise_scale", 1.0)
+    base_scheduler = DDPMScheduler.from_config(pipeline.scheduler.config)
+    # shift_mode = scheduler_config.get("shift_noise_mode", "interpolated")
+    # shift_scale = scheduler_config.get("shift_noise_scale", 1.0)
 
-    pipeline.scheduler = ShiftSNRScheduler.from_scheduler(
-        noise_scheduler=base_scheduler,
-        shift_mode=shift_mode,
-        shift_scale=shift_scale,
-        scheduler_class=DPMSolverMultistepScheduler,
-    )
-    ic(
-        f"Replaced default scheduler with ShiftSNRScheduler (mode={shift_mode}, scale={shift_scale})"
-    )
+    # pipeline.scheduler = ShiftSNRScheduler.from_scheduler(
+    #     noise_scheduler=base_scheduler,
+    #     shift_mode=shift_mode,
+    #     shift_scale=shift_scale,
+    #     scheduler_class=DDPMScheduler,
+    # )
+
+    pipeline.scheduler = base_scheduler
 
     pipeline.safety_checker = None
     pipeline.feature_extractor = None

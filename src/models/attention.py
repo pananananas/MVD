@@ -158,7 +158,7 @@ class ImageCrossAttentionProcessor(nn.Module):
         ref_hidden_states_output = self.to_out_ref[1](ref_hidden_states_output)
 
         # Apply LayerNorm to the output of the reference attention path
-        ref_hidden_states_output = self.ref_ln(ref_hidden_states_output)
+        # ref_hidden_states_output = self.ref_ln(ref_hidden_states_output)
 
         if input_ndim == 4:
             batch_size, channel, height, width = hidden_states.shape

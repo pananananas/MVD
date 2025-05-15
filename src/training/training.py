@@ -1,7 +1,10 @@
 from src.models.attention import ImageCrossAttentionProcessor
+from diffusers.optimization import get_cosine_schedule_with_warmup
+from torcheval.metrics import FrechetInceptionDistance
 from .losses import PerceptualLoss, compute_losses
 from pytorch_lightning import LightningModule
-from diffusers import DPMSolverMultistepScheduler
+from torchmetrics.multimodal import CLIPScore
+from diffusers import DDPMScheduler
 from pytorch_msssim import SSIM
 import torch.nn.functional as F
 from typing import Optional
@@ -33,10 +36,10 @@ class MVDLightningModule(LightningModule):
         self.vae = pipeline.vae
         self.text_encoder = pipeline.text_encoder
         self.tokenizer = pipeline.tokenizer
-        self.scheduler = DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config)
+        self.scheduler = DDPMScheduler.from_config(pipeline.scheduler.config)
         self.pipeline = pipeline
 
-        self.base_scheduler = DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config)
+        self.base_scheduler = DDPMScheduler.from_config(pipeline.scheduler.config)
 
         # 1. Freeze VAE and Text Encoder
         self.vae.requires_grad_(False)
@@ -45,7 +48,7 @@ class MVDLightningModule(LightningModule):
         self.text_encoder.eval()
 
         # 2. Freeze all parameters of self.unet
-        if not self.config.get('train_denoising_unet', False):
+        if not self.config.get("train_denoising_unet", False):
             for param in self.unet.parameters():
                 param.requires_grad = False
         else:
@@ -93,6 +96,25 @@ class MVDLightningModule(LightningModule):
 
         self.ssim = SSIM(data_range=2.0, size_average=True)
         self.perceptual_loss = PerceptualLoss(device="cpu")
+
+        # Initialize CLIPScore metric
+        clip_model_name = self.config.get(
+            "clip_model_name", "openai/clip-vit-large-patch14"
+        )
+        try:
+            self.clip_score_metric = CLIPScore(model_name_or_path=clip_model_name)
+        except Exception as e:
+            ic(f"Error initializing CLIPScore metric: {e}")
+            self.clip_score_metric = None
+
+        # Initialize FrechetInceptionDistance metric
+        try:
+            self.fid_metric = FrechetInceptionDistance(
+                device="cpu"
+            )  # Initialize on CPU, move to device in wrapper
+        except Exception as e:
+            ic(f"Error initializing FrechetInceptionDistance metric: {e}")
+            self.fid_metric = None
 
         self.training_step_outputs = []
         self.validation_step_outputs = []
@@ -145,6 +167,8 @@ class MVDLightningModule(LightningModule):
     def forward(self, batch):
         source_images = batch["source_image"].to(self.device)
         target_images = batch["target_image"].to(self.device)
+        # ic(self.unet.dtype)
+        # ic(self.scheduler.config)
 
         source_latents = self.vae.encode(source_images).latent_dist.sample()
         source_latents = source_latents * self.vae.config.scaling_factor
@@ -198,12 +222,11 @@ class MVDLightningModule(LightningModule):
             noisy_latents,
             timesteps,
             target_latents,
-            source_latents,
         )
 
     def training_step(self, batch, batch_idx):
-        noise_pred, noise, noisy_latents, timesteps, target_latents, source_latents = (
-            self.forward(batch)
+        noise_pred, noise, noisy_latents, timesteps, target_latents = self.forward(
+            batch
         )
 
         losses = compute_losses(
@@ -217,6 +240,10 @@ class MVDLightningModule(LightningModule):
             base_scheduler=self.base_scheduler,
             perceptual_loss_fn=self.perceptual_loss,
             ssim_loss_fn=self.ssim,
+            clip_score_fn=self._compute_batch_clip_score
+            if self.clip_score_metric
+            else None,
+            fid_score_fn=self._compute_batch_fid_score if self.fid_metric else None,
             config=self.config,
         )
 
@@ -237,8 +264,8 @@ class MVDLightningModule(LightningModule):
         return losses["noise_loss"]
 
     def validation_step(self, batch, batch_idx):
-        noise_pred, noise, noisy_latents, timesteps, target_latents, source_latents = (
-            self.forward(batch)
+        noise_pred, noise, noisy_latents, timesteps, target_latents = self.forward(
+            batch
         )
 
         losses = compute_losses(
@@ -252,6 +279,10 @@ class MVDLightningModule(LightningModule):
             base_scheduler=self.base_scheduler,
             perceptual_loss_fn=self.perceptual_loss,
             ssim_loss_fn=self.ssim,
+            clip_score_fn=self._compute_batch_clip_score
+            if self.clip_score_metric
+            else None,
+            fid_score_fn=self._compute_batch_fid_score if self.fid_metric else None,
             config=self.config,
         )
 
@@ -385,7 +416,28 @@ class MVDLightningModule(LightningModule):
             weight_decay=0.01,
         )
 
-        return optimizer
+        num_training_steps = (
+            self.trainer.estimated_stepping_batches
+        )  # Or calculate manually
+        lr_warmup_steps = int(
+            num_training_steps * 0.05
+        )  # e.g., 5% of total steps for warmup
+
+        lr_scheduler = get_cosine_schedule_with_warmup(
+            optimizer=optimizer,
+            num_warmup_steps=lr_warmup_steps,  # Define appropriately, e.g., config['lr_warmup_steps']
+            num_training_steps=num_training_steps,
+        )
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": lr_scheduler,
+                "interval": "step",  # Call scheduler every step
+                "frequency": 1,
+            },
+        }
+
+        # return optimizer
 
         # warmup_steps = int(0.1 * self.trainer.estimated_stepping_batches)
         # ic(f"Total estimated stepping batches for OneCycleLR: {self.trainer.estimated_stepping_batches}, warmup_steps: {warmup_steps}")
@@ -472,6 +524,34 @@ class MVDLightningModule(LightningModule):
                 logger.error(
                     f"Error logging WandB comparison at global_step {self.global_step}: {e}"
                 )
+
+    def on_before_optimizer_step(self, optimizer):
+        if self.global_step % self.config.get("metrics_log_interval", 10) == 0:
+            norm_type = 2.0
+            params = [
+                p
+                for p in self.unet.parameters()
+                if p.grad is not None and p.requires_grad
+            ]
+            if not params:
+                return
+
+            total_norm = torch.norm(
+                torch.stack(
+                    [
+                        torch.norm(p.grad.detach(), norm_type).to(self.device)
+                        for p in params
+                    ]
+                ),
+                norm_type,
+            )
+            self.log(
+                "train_debug/total_grad_norm",
+                total_norm,
+                on_step=True,
+                on_epoch=False,
+                prog_bar=False,
+            )
 
     def on_after_backward(self):
         if self.global_step % self.metrics_log_interval == 0:
@@ -644,3 +724,83 @@ class MVDLightningModule(LightningModule):
             self.log(f"train_epoch/{metric}", avg_metrics[metric])
 
         self.training_step_outputs.clear()
+
+    def _preprocess_images_for_clip(self, images_tensor):
+        processed_images = ((images_tensor.clamp(-1, 1) + 1) / 2.0 * 255).to(
+            torch.uint8
+        )
+        return processed_images
+
+    def _preprocess_images_for_fid(self, images_tensor):
+        processed_images = ((images_tensor.clamp(-1, 1) + 1) / 2.0).to(torch.float32)
+        return processed_images
+
+    def _compute_batch_clip_score(self, generated_images, target_images):
+        if (
+            self.clip_score_metric is None
+            or not hasattr(self.clip_score_metric, "model")
+            or not hasattr(self.clip_score_metric, "processor")
+        ):
+            ic(
+                "CLIPScore metric, its model, or processor not available, skipping computation."
+            )
+            return torch.tensor(0.0, device=generated_images.device)
+        try:
+            device = generated_images.device
+            self.clip_score_metric = self.clip_score_metric.to(device)
+
+            generated_uint8 = self._preprocess_images_for_clip(generated_images)
+            target_uint8 = self._preprocess_images_for_clip(target_images)
+
+            processed_generated = self.clip_score_metric.processor(
+                images=generated_uint8, return_tensors="pt", padding=True
+            ).to(device)
+            processed_target = self.clip_score_metric.processor(
+                images=target_uint8, return_tensors="pt", padding=True
+            ).to(device)
+
+            generated_embeddings = self.clip_score_metric.model.get_image_features(
+                pixel_values=processed_generated["pixel_values"]
+            )
+            target_embeddings = self.clip_score_metric.model.get_image_features(
+                pixel_values=processed_target["pixel_values"]
+            )
+
+            generated_embeddings_norm = F.normalize(generated_embeddings, p=2, dim=-1)
+            target_embeddings_norm = F.normalize(target_embeddings, p=2, dim=-1)
+
+            clip_similarity = (
+                (generated_embeddings_norm * target_embeddings_norm).sum(dim=-1).mean()
+            )
+
+            score_val = clip_similarity.item()
+
+            return torch.tensor(score_val, device=generated_images.device)
+        except Exception as e:
+            ic(f"Error computing Image-to-Image CLIP score: {e}")
+            return torch.tensor(0.0, device=generated_images.device)
+
+    def _compute_batch_fid_score(self, generated_images, target_images):
+        if self.fid_metric is None:
+            ic("FID metric not available, skipping computation.")
+            return torch.tensor(0.0, device=generated_images.device)
+        try:
+            self.fid_metric = self.fid_metric.to(generated_images.device)
+
+            generated_processed = self._preprocess_images_for_fid(generated_images)
+            target_processed = self._preprocess_images_for_fid(target_images)
+
+            if generated_processed.ndim == 3:
+                generated_processed = generated_processed.unsqueeze(0)
+            if target_processed.ndim == 3:
+                target_processed = target_processed.unsqueeze(0)
+
+            self.fid_metric.update(generated_processed, is_real=False)
+            self.fid_metric.update(target_processed, is_real=True)
+            fid_value = self.fid_metric.compute()
+            self.fid_metric.reset()
+            return fid_value
+        except Exception as e:
+            ic(f"Error computing FID score: {e}")
+            self.fid_metric.reset()
+            return torch.tensor(0.0, device=generated_images.device)

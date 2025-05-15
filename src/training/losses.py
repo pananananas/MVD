@@ -56,14 +56,16 @@ def compute_losses(
     base_scheduler=None,
     perceptual_loss_fn=None,
     ssim_loss_fn=None,
+    clip_score_fn=None,
+    fid_score_fn=None,
     config=None,
 ):
-    noise_loss_per_element = F.mse_loss(noise_pred, noise, reduction="none")
+    # noise_loss_per_element = F.mse_loss(noise_pred, noise) # Original line
 
-    loss_config = config.get("loss_config", {})
+    # loss_config = config.get("loss_config", {})
     # use_snr = loss_config.get("use_snr_loss", False)
 
-    device = noise_loss_per_element.device
+    device = noise_pred.device  # Ensure device is taken from a tensor that exists
     zero_tensor = torch.tensor(0.0, device=device)
     one_tensor = torch.tensor(1.0, device=device)
 
@@ -73,43 +75,50 @@ def compute_losses(
         "perceptual_loss": zero_tensor,
         "ssim_loss": zero_tensor,
         "ssim_value": zero_tensor,
+        "clip_score": zero_tensor,
+        "fid_score": zero_tensor,
         "mean_snr": zero_tensor,
         "mean_snr_weight": one_tensor,
     }
 
     # if use_snr and base_scheduler is not None and timesteps is not None:
 
-    snr = compute_snr(timesteps, base_scheduler)
-    snr_gamma = loss_config.get("snr_gamma", 5.0)
+    # snr = compute_snr(timesteps, base_scheduler)
+    # snr_gamma = loss_config.get("snr_gamma", 5.0)
 
-    # Compute loss weights as per Min-SNR paper (Section 3.4)
-    # Note: The paper uses SNR = SNR_t = alpha_t^2 / sigma_t^2
-    # The weight is min(SNR_t, gamma) / SNR_t
-    snr_clipped = torch.stack([snr, snr_gamma * torch.ones_like(snr)], dim=1).min(
-        dim=1
-    )[0]
-    mse_loss_weights = snr_clipped / snr
+    # # Compute loss weights as per Min-SNR paper (Section 3.4)
+    # # Note: The paper uses SNR = SNR_t = alpha_t^2 / sigma_t^2
+    # # The weight is min(SNR_t, gamma) / SNR_t
+    # snr_clipped = torch.stack([snr, snr_gamma * torch.ones_like(snr)], dim=1).min(
+    #     dim=1
+    # )[0]
+    # mse_loss_weights = snr_clipped / snr
 
-    # Reshape weights to match the loss tensor (B, C, H, W) -> (B,) -> (B, 1, 1, 1)
-    mse_loss_weights = mse_loss_weights.flatten()
-    while len(mse_loss_weights.shape) < len(noise_loss_per_element.shape):
-        mse_loss_weights = mse_loss_weights.unsqueeze(-1)
+    # # Reshape weights to match the loss tensor (B, C, H, W) -> (B,) -> (B, 1, 1, 1)
+    # mse_loss_weights = mse_loss_weights.flatten()
+    # while len(mse_loss_weights.shape) < len(noise_loss_per_element.shape):
+    #     mse_loss_weights = mse_loss_weights.unsqueeze(-1)
 
-    # Apply weights element-wise
-    weighted_loss = noise_loss_per_element * mse_loss_weights
-    noise_loss = weighted_loss.mean()
+    # # Apply weights element-wise
+    # weighted_loss = noise_loss_per_element * mse_loss_weights
+    # noise_loss = weighted_loss.mean()
 
-    # Log mean SNR and weight
-    metrics["mean_snr"] = snr.mean().detach()
-    metrics["mean_snr_weight"] = mse_loss_weights.mean().detach()
+    # # Log mean SNR and weight
+    # metrics["mean_snr"] = snr.mean().detach()
+    # metrics["mean_snr_weight"] = mse_loss_weights.mean().detach()
 
-    # else:
-    #     # Default: standard MSE loss (mean over all elements)
-    #     noise_loss = noise_loss_per_element.mean()
+    # noise_loss = noise_loss_per_element # Original line before potential SNR weighting
 
-    total_loss = (
-        noise_loss  # For now, total_loss is just the (potentially weighted) noise loss
-    )
+    # Determine the correct target for the loss based on the scheduler's prediction type
+    
+    if scheduler.config.prediction_type == "epsilon":
+        target = noise
+    elif scheduler.config.prediction_type == "v_prediction":
+        target = scheduler.get_velocity(target_latents, noise, timesteps)
+    
+    noise_loss = F.mse_loss(noise_pred.float(), target.float())
+    
+    total_loss = noise_loss
 
     if (
         noisy_latents is not None
@@ -176,15 +185,35 @@ def compute_losses(
                     metrics["ssim_value"] = ssim_val
                     metrics["ssim_loss"] = 1.0 - ssim_val
 
+                if clip_score_fn is not None:
+                    try:
+                        clip_val = clip_score_fn(denoised_images.float(), target_images.float()).detach()
+                        metrics["clip_score"] = clip_val
+                        ic("CLIP score computed:", metrics["clip_score"])
+                    except Exception as e:
+                        ic(f"Exception during CLIP score computation: {e}")
+                else:
+                    ic("clip_score_fn not provided, skipping CLIP score computation.")
+
+                if fid_score_fn is not None:
+                    try:
+                        fid_val = fid_score_fn(denoised_images.float(), target_images.float()).detach()
+                        metrics["fid_score"] = fid_val
+                        ic("FID score computed:", metrics["fid_score"])
+                    except Exception as e:
+                        ic(f"Exception during FID score computation: {e}")
+                else:
+                    ic("fid_score_fn not provided, skipping FID score computation.")
+
             except Exception as e:
                 ic(f"Exception during auxiliary metric computation: {e}")
 
         if torch.isnan(noise_pred).any() or torch.isinf(noise_pred).any():
             ic("NaN/Inf detected in noise_pred!")
 
-        # if noisy_latents is not None:
-        #     ic(f"Compute Losses Stats:")
-        #     ic(f"  Input:  {noise_pred}, {noise}")
-        #     ic(f"  Latents: {target_latents}, {noisy_latents}")
+    # if noisy_latents is not None:
+    #     ic(f"Compute Losses Stats:")
+    #     ic(f"  Input:  {noise_pred}, {noise}")
+    #     ic(f"  Latents: {target_latents}, {noisy_latents}")
 
     return {"total_loss": total_loss, "noise_loss": noise_loss, **metrics}

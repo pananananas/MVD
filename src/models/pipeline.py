@@ -31,7 +31,7 @@ class MVDPipeline(StableDiffusionPipeline):
         source_camera: Optional[torch.Tensor] = None,
         target_camera: Optional[torch.Tensor] = None,
         source_images: Optional[torch.Tensor] = None,
-        ref_scale: float = None,
+        ref_scale: float = 0.1,
         use_camera_embeddings: bool = True,
         use_image_conditioning: bool = True,
         debug_log_file_path: Optional[str] = None,
