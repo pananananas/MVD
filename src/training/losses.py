@@ -81,43 +81,42 @@ def compute_losses(
         "mean_snr_weight": one_tensor,
     }
 
-    # if use_snr and base_scheduler is not None and timesteps is not None:
-
-    # snr = compute_snr(timesteps, base_scheduler)
-    # snr_gamma = loss_config.get("snr_gamma", 5.0)
-
-    # # Compute loss weights as per Min-SNR paper (Section 3.4)
-    # # Note: The paper uses SNR = SNR_t = alpha_t^2 / sigma_t^2
-    # # The weight is min(SNR_t, gamma) / SNR_t
-    # snr_clipped = torch.stack([snr, snr_gamma * torch.ones_like(snr)], dim=1).min(
-    #     dim=1
-    # )[0]
-    # mse_loss_weights = snr_clipped / snr
-
-    # # Reshape weights to match the loss tensor (B, C, H, W) -> (B,) -> (B, 1, 1, 1)
-    # mse_loss_weights = mse_loss_weights.flatten()
-    # while len(mse_loss_weights.shape) < len(noise_loss_per_element.shape):
-    #     mse_loss_weights = mse_loss_weights.unsqueeze(-1)
-
-    # # Apply weights element-wise
-    # weighted_loss = noise_loss_per_element * mse_loss_weights
-    # noise_loss = weighted_loss.mean()
-
-    # # Log mean SNR and weight
-    # metrics["mean_snr"] = snr.mean().detach()
-    # metrics["mean_snr_weight"] = mse_loss_weights.mean().detach()
-
-    # noise_loss = noise_loss_per_element # Original line before potential SNR weighting
-
     # Determine the correct target for the loss based on the scheduler's prediction type
-    
     if scheduler.config.prediction_type == "epsilon":
         target = noise
     elif scheduler.config.prediction_type == "v_prediction":
         target = scheduler.get_velocity(target_latents, noise, timesteps)
-    
-    noise_loss = F.mse_loss(noise_pred.float(), target.float())
-    
+
+    noise_loss_per_element = F.mse_loss(noise_pred.float(), target.float())
+
+    # if use_snr and base_scheduler is not None and timesteps is not None:
+
+    snr = compute_snr(timesteps, base_scheduler)
+    snr_gamma = 5.0
+
+    # Compute loss weights as per Min-SNR paper (Section 3.4)
+    # Note: The paper uses SNR = SNR_t = alpha_t^2 / sigma_t^2
+    # The weight is min(SNR_t, gamma) / SNR_t
+    snr_clipped = torch.stack([snr, snr_gamma * torch.ones_like(snr)], dim=1).min(
+        dim=1
+    )[0]
+    mse_loss_weights = snr_clipped / snr
+
+    # Reshape weights to match the loss tensor (B, C, H, W) -> (B,) -> (B, 1, 1, 1)
+    mse_loss_weights = mse_loss_weights.flatten()
+    while len(mse_loss_weights.shape) < len(noise_loss_per_element.shape):
+        mse_loss_weights = mse_loss_weights.unsqueeze(-1)
+
+    # Apply weights element-wise
+    weighted_loss = noise_loss_per_element * mse_loss_weights
+    noise_loss = weighted_loss.mean()
+
+    # Log mean SNR and weight
+    metrics["mean_snr"] = snr.mean().detach()
+    metrics["mean_snr_weight"] = mse_loss_weights.mean().detach()
+
+    # noise_loss = noise_loss_per_element  # Original line before potential SNR weighting
+
     total_loss = noise_loss
 
     if (
@@ -187,9 +186,10 @@ def compute_losses(
 
                 if clip_score_fn is not None:
                     try:
-                        clip_val = clip_score_fn(denoised_images.float(), target_images.float()).detach()
+                        clip_val = clip_score_fn(
+                            denoised_images.float(), target_images.float()
+                        ).detach()
                         metrics["clip_score"] = clip_val
-                        ic("CLIP score computed:", metrics["clip_score"])
                     except Exception as e:
                         ic(f"Exception during CLIP score computation: {e}")
                 else:
@@ -197,9 +197,10 @@ def compute_losses(
 
                 if fid_score_fn is not None:
                     try:
-                        fid_val = fid_score_fn(denoised_images.float(), target_images.float()).detach()
+                        fid_val = fid_score_fn(
+                            denoised_images.float(), target_images.float()
+                        ).detach()
                         metrics["fid_score"] = fid_val
-                        ic("FID score computed:", metrics["fid_score"])
                     except Exception as e:
                         ic(f"Exception during FID score computation: {e}")
                 else:

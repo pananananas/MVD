@@ -265,7 +265,7 @@ class MultiViewUNet(nn.Module):
             )
 
             batch_size = source_image_latents.shape[0]
-            encoder_timestep = torch.zeros(batch_size, device=self.device).long()
+            encoder_timestep = torch.tensor([0], dtype=torch.long, device=self.device)
 
             image_encoder_text_embeddings = encoder_hidden_states
 
@@ -404,17 +404,18 @@ def create_mvd_pipeline(
     )
 
     base_scheduler = DDPMScheduler.from_config(pipeline.scheduler.config)
-    # shift_mode = scheduler_config.get("shift_noise_mode", "interpolated")
-    # shift_scale = scheduler_config.get("shift_noise_scale", 1.0)
+    # pipeline.scheduler = base_scheduler
 
-    # pipeline.scheduler = ShiftSNRScheduler.from_scheduler(
-    #     noise_scheduler=base_scheduler,
-    #     shift_mode=shift_mode,
-    #     shift_scale=shift_scale,
-    #     scheduler_class=DDPMScheduler,
-    # )
+    shift_mode = scheduler_config.get("shift_noise_mode", "interpolated")
+    shift_scale = scheduler_config.get("shift_noise_scale", 1.0)
 
-    pipeline.scheduler = base_scheduler
+    pipeline.scheduler = ShiftSNRScheduler.from_scheduler(
+        noise_scheduler=base_scheduler,
+        shift_mode=shift_mode,
+        shift_scale=shift_scale,
+        scheduler_class=DDPMScheduler,
+    )
+
 
     pipeline.safety_checker = None
     pipeline.feature_extractor = None
