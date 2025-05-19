@@ -6,9 +6,11 @@ from pathlib import Path
 import lovely_tensors as lt
 import torch
 import yaml
+from icecream import ic
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, Timer
 from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.plugins.environments import SLURMEnvironment
 from pytorch_lightning.strategies import DDPStrategy
 
 import wandb
@@ -23,7 +25,7 @@ lt.monkey_patch()
 def get_gpu_devices():
     if torch.cuda.is_available():
         device_count = torch.cuda.device_count()
-        print(f"Found {device_count} GPU devices:")
+        ic(f"Found {device_count} GPU devices:")
         devices = []
         for i in range(device_count):
             props = torch.cuda.get_device_properties(i)
@@ -46,18 +48,66 @@ def main(config, cuda, resume_from_checkpoint=None):
         os.environ["HF_HOME"] = HUGGINGFACE_CACHE
         if config["max_samples"] == 100:
             print("Using small dataset")
-            dataset_path = "/net/pr2/projects/plgrid/plggtattooai/code/eryk/MVD/objaverse/"
+            dataset_path = (
+                "/net/pr2/projects/plgrid/plggtattooai/code/eryk/MVD/objaverse/"
+            )
         else:
-            dataset_path = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/"
+            dataset_path = (
+                "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/"
+            )
 
     else:
         dataset_path = "/Users/ewojcik/Code/pwr/MVD/objaverse"
 
-    wandb_logger = WandbLogger(
-        project="mvd",
-        config=config,
-        log_model=True,
-    )
+    wandb_run_id = args.wandb_id
+
+    if resume_from_checkpoint and not wandb_run_id:
+        ic(f"Attempting to load WandB ID from checkpoint: {resume_from_checkpoint}")
+        try:
+            ckpt = torch.load(
+                resume_from_checkpoint, map_location="cpu", weights_only=False
+            )
+            ic("Checkpoint loaded for WandB ID extraction.")
+
+            if "hyper_parameters" in ckpt and "wandb_id" in ckpt["hyper_parameters"]:
+                wandb_run_id = ckpt["hyper_parameters"]["wandb_id"]
+                ic(
+                    f"Found WandB run ID in checkpoint's hyper_parameters: {wandb_run_id}"
+                )
+            else:
+                ic(
+                    "WandB run ID not found in checkpoint's hyper_parameters. Will start new run or use manual ID if provided later."
+                )
+
+            if "epoch" in ckpt:
+                ic(f"Checkpoint epoch (for info): {ckpt['epoch']}")
+            if "global_step" in ckpt:
+                ic(f"Checkpoint global_step (for info): {ckpt['global_step']}")
+
+        except Exception as e:
+            ic(
+                f"Could not load or parse checkpoint to find WandB ID: {e}. Will start new run or use manual ID."
+            )
+
+    elif args.wandb_id:
+        ic(f"Using manually provided WandB ID: {args.wandb_id}")
+
+    if wandb_run_id:
+        wandb_logger = WandbLogger(
+            project="mvd",
+            config=config,
+            log_model=True,
+            id=wandb_run_id,
+            resume="must",  # or "allow"
+        )
+        ic(f"Resuming WandB run with ID: {wandb_run_id}")
+    else:
+        wandb_logger = WandbLogger(
+            project="mvd",
+            config=config,
+            log_model=True,
+        )
+        ic("Starting a new WandB run.")
 
     data_module = ObjaverseDataModule(
         data_root=dataset_path,
@@ -84,12 +134,18 @@ def main(config, cuda, resume_from_checkpoint=None):
     dirs = create_output_dirs("outputs")
     debug_log_file_path = dirs["logs"] / "val_debug_logs.txt"
 
+    _wandb_id_to_save_in_hparams = wandb_run_id
+
     model = MVDLightningModule(
         pipeline=pipeline,
         config=config,
         dirs=dirs,
         debug_log_file_path=str(debug_log_file_path),
+        wandb_id=_wandb_id_to_save_in_hparams,
     )
+
+    if _wandb_id_to_save_in_hparams is None and wandb_logger.experiment:
+        model.hparams.wandb_id = wandb_logger.experiment.id
 
     checkpoint_callback = ModelCheckpoint(
         dirpath=dirs["checkpoints"],
@@ -110,14 +166,17 @@ def main(config, cuda, resume_from_checkpoint=None):
     ]
 
     precision_value = "32" if config["torch_dtype"] == "float32" else "16"
-    print(f"Using PyTorch Lightning precision: {precision_value}")
+    ic(f"Using PyTorch Lightning precision: {precision_value}")
 
     if config["num_gpus"] > 1:
         devices = get_gpu_devices()
-        print(f"Using {len(devices)} GPUs")
+        ic(f"Using {len(devices)} GPUs")
 
+        slurm_env = SLURMEnvironment()
         strategy = DDPStrategy(
-            find_unused_parameters=True, timeout=datetime.timedelta(minutes=1)
+            find_unused_parameters=False,
+            timeout=datetime.timedelta(minutes=1),
+            cluster_environment=slurm_env,
         )
     else:
         strategy = "auto"
@@ -142,7 +201,7 @@ def main(config, cuda, resume_from_checkpoint=None):
     trainer.fit(
         model,
         data_module,
-        ckpt_path=resume_from_checkpoint or config.get("checkpoint_path"),
+        ckpt_path=resume_from_checkpoint,
     )
 
     wandb.finish()
@@ -157,7 +216,7 @@ def load_config(config_path):
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
-    print(f"Loaded configuration from: {config_path}")
+    ic(f"Loaded configuration from: {config_path}")
     return config
 
 
@@ -179,6 +238,12 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="Path to checkpoint to resume from",
+    )
+    parser.add_argument(
+        "--wandb_id",
+        type=str,
+        default=None,
+        help="W&B run ID to resume. Overrides ID from checkpoint.",
     )
     args = parser.parse_args()
     config = load_config(args.config)

@@ -25,9 +25,15 @@ class MVDLightningModule(LightningModule):
         config,
         dirs,
         debug_log_file_path: Optional[str] = None,
+        wandb_id: Optional[str] = None,
     ):
         super().__init__()
         self.config = config
+        hparams_to_save = config.copy()
+        hparams_to_save['wandb_id'] = wandb_id
+        hparams_to_save['dirs_repr'] = {k: str(v) for k, v in dirs.items()}
+        hparams_to_save['debug_log_file_path_repr'] = str(debug_log_file_path)
+        self.hparams.update(hparams_to_save)
         self.save_hyperparameters(ignore=["pipeline"])
 
         self.debug_log_file_path = debug_log_file_path
@@ -716,10 +722,17 @@ class MVDLightningModule(LightningModule):
                     self.unet.camera_encoder._current_modulation_stats.clear()
 
     def on_train_epoch_end(self):
+        if not self.training_step_outputs:
+            # This happends when resuming from a checkpoint
+            ic("on_train_epoch_end called with empty training_step_outputs. Skipping metric calculation for this epoch.")
+            self.training_step_outputs.clear()
+            return
+
         avg_metrics = {}
-        for metric in self.training_step_outputs[0].keys():
+        reference_keys = self.training_step_outputs[0].keys()
+        for metric in reference_keys:
             avg_metrics[metric] = sum(
-                output[metric] for output in self.training_step_outputs
+                output.get(metric, 0.0) for output in self.training_step_outputs
             ) / len(self.training_step_outputs)
             self.log(f"train_epoch/{metric}", avg_metrics[metric])
 

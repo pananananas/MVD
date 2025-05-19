@@ -1,3 +1,17 @@
+# TODO:
+
+- multi gpu training
+
+- train resuming
+
+- fix FID calculation
+
+- dataset filtering
+
+- val of FiLM conditioning
+
+
+
 # Multi-View Diffusion
 
 ## Installation

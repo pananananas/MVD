@@ -9,8 +9,8 @@ use_memory_efficient_attention: true
 enable_gradient_checkpointing: true
 
 # Conditioning parameters
-img_ref_scale: 0.25
-cam_modulation_strength: 0.25
+img_ref_scale: 0.5
+cam_modulation_strength: 0.5
 
 # Training parameters
 num_gpus: 1
