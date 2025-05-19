@@ -1,17 +1,3 @@
-# TODO:
-
-- multi gpu training
-
-- train resuming
-
-- fix FID calculation
-
-- dataset filtering
-
-- val of FiLM conditioning
-
-
-
 # Multi-View Diffusion
 
 ## Installation
@@ -44,8 +30,12 @@ run inference:
 uv run infer.py --checkpoint path/to/checkpoint.ckpt
 ```
 
-<!--
+# TODOs
 
+- [ ] extended data filtering
+- [ ] FiLM layers experiments setup
+
+<!--
 # Plan działania
 
 1. Przygotowanie danych
