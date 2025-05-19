@@ -1,5 +1,7 @@
 # Multi-View Diffusion
 
+![Image](https://github.com/user-attachments/assets/0e35bc1d-1a0c-43d5-93b9-945866db86ad)
+
 ## Installation
 
 install env with uv package manager:
