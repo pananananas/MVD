@@ -30,6 +30,7 @@ dependencies = [
     "seaborn>=0.13.2",
     "tenacity>=9.0.0",
     "torch>=2.6.0",
+    "torch-fidelity>=0.3.0",
     "torchaudio>=2.6.0",
     "torcheval>=0.0.7",
     "torchvision>=0.21.0",

@@ -46,7 +46,7 @@ def main(config, cuda, resume_from_checkpoint=None):
         HUGGINGFACE_CACHE = os.path.join(SCRATCH, "huggingface_cache")
         os.makedirs(HUGGINGFACE_CACHE, exist_ok=True)
         os.environ["HF_HOME"] = HUGGINGFACE_CACHE
-        if config["max_samples"] == 100:
+        if config["dataset_samples"] == 100:
             print("Using small dataset")
             dataset_path = (
                 "/net/pr2/projects/plgrid/plggtattooai/code/eryk/MVD/objaverse/"
@@ -115,7 +115,7 @@ def main(config, cuda, resume_from_checkpoint=None):
         num_workers=config["num_workers"],
         target_size=(config["image_size"][0], config["image_size"][1]),
         max_views_per_object=config["max_views_per_object"],
-        max_samples=config["max_samples"],
+        dataset_samples=config["dataset_samples"],
     )
 
     pipeline = create_mvd_pipeline(
@@ -174,7 +174,7 @@ def main(config, cuda, resume_from_checkpoint=None):
 
         slurm_env = SLURMEnvironment()
         strategy = DDPStrategy(
-            find_unused_parameters=False,
+            find_unused_parameters=True,
             timeout=datetime.timedelta(minutes=1),
             cluster_environment=slurm_env,
         )

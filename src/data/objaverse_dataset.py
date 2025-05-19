@@ -30,7 +30,7 @@ class ObjaverseDataset(Dataset):
         target_size: Tuple[int, int] = (256, 256),
         max_views_per_object: int = 4,
         seed: int = 42,
-        max_samples: Optional[int] = None,
+        dataset_samples: Optional[int] = None,
     ):
         super().__init__()
         self.data_root = Path(data_root)
@@ -38,7 +38,7 @@ class ObjaverseDataset(Dataset):
         self.transform = transform
         self.target_size = target_size
         self.max_views_per_object = max_views_per_object
-        self.max_samples = max_samples
+        self.dataset_samples = dataset_samples
         self.rng = random.Random(seed)
 
         render_dir = self.data_root / "renders"
@@ -86,10 +86,10 @@ class ObjaverseDataset(Dataset):
     def _build_view_pairs(self) -> None:
         """Build pairs of source and target views from each object, using a cache if possible."""
 
-        max_samples_suffix = (
-            f"_max{self.max_samples}" if self.max_samples is not None else "_all"
+        dataset_samples_suffix = (
+            f"_max{self.dataset_samples}" if self.dataset_samples is not None else "_all"
         )
-        cache_filename = f"objaverse_{self.split}_pairs_cache_{self.zip_files_hash}{max_samples_suffix}.json"
+        cache_filename = f"objaverse_{self.split}_pairs_cache_{self.zip_files_hash}{dataset_samples_suffix}.json"
         cache_path = self.data_root / cache_filename
 
         if cache_path.exists():
@@ -168,8 +168,8 @@ class ObjaverseDataset(Dataset):
                             )
 
                     if (
-                        self.max_samples is not None
-                        and len(self.view_pairs) >= self.max_samples
+                        self.dataset_samples is not None
+                        and len(self.view_pairs) >= self.dataset_samples
                     ):
                         break
 
@@ -178,8 +178,8 @@ class ObjaverseDataset(Dataset):
                 continue
 
             if (
-                self.max_samples is not None
-                and len(self.view_pairs) >= self.max_samples
+                self.dataset_samples is not None
+                and len(self.view_pairs) >= self.dataset_samples
             ):
                 break
 
@@ -299,7 +299,7 @@ class ObjaverseDataModule(pl.LightningDataModule):
         target_size: Tuple[int, int] = (256, 256),
         max_views_per_object: int = 4,
         seed: int = 42,
-        max_samples: Optional[int] = None,
+        dataset_samples: Optional[int] = None,
     ):
         super().__init__()
         self.data_root = data_root
@@ -309,7 +309,7 @@ class ObjaverseDataModule(pl.LightningDataModule):
         self.target_size = target_size
         self.max_views_per_object = max_views_per_object
         self.seed = seed
-        self.max_samples = max_samples
+        self.dataset_samples = dataset_samples
 
         self.transform = None
 
@@ -323,7 +323,7 @@ class ObjaverseDataModule(pl.LightningDataModule):
                 target_size=self.target_size,
                 max_views_per_object=self.max_views_per_object,
                 seed=self.seed,
-                max_samples=self.max_samples,
+                dataset_samples=self.dataset_samples,
             )
 
             self.val_dataset = ObjaverseDataset(
@@ -334,7 +334,7 @@ class ObjaverseDataModule(pl.LightningDataModule):
                 target_size=self.target_size,
                 max_views_per_object=self.max_views_per_object,
                 seed=self.seed,
-                max_samples=self.max_samples,
+                dataset_samples=self.dataset_samples,
             )
 
         if stage == "test" or stage is None:
@@ -346,7 +346,7 @@ class ObjaverseDataModule(pl.LightningDataModule):
                 target_size=self.target_size,
                 max_views_per_object=self.max_views_per_object,
                 seed=self.seed,
-                max_samples=self.max_samples,
+                dataset_samples=self.dataset_samples,
             )
 
     def train_dataloader(self):
@@ -416,7 +416,7 @@ def main():
         num_workers=4,
         target_size=(1024, 1024),
         max_views_per_object=4,
-        max_samples=1,
+        dataset_samples=1,
     )
     data_module.setup()
 

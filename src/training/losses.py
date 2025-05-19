@@ -1,10 +1,21 @@
-from src.training.scheduler import compute_snr
-from torchvision.transforms import Normalize
-from torchvision.models import VGG16_Weights
-import torchvision.models as models
-import torch.nn.functional as F
-from icecream import ic
 import torch
+import torch.nn.functional as F
+import torchvision.models as models
+from icecream import ic
+from torchvision.models import VGG16_Weights
+from torchvision.transforms import Normalize
+
+from src.training.scheduler import compute_snr
+
+
+def _preprocess_images_for_clip(images_tensor):
+    processed_images = ((images_tensor.clamp(-1, 1) + 1) / 2.0 * 255).to(torch.uint8)
+    return processed_images
+
+
+def _preprocess_images_for_torchmetrics_fid(images_tensor):
+    processed_images = ((images_tensor.clamp(-1, 1) + 1) / 2.0).to(torch.float32)
+    return processed_images
 
 
 class PerceptualLoss:
@@ -45,6 +56,75 @@ class PerceptualLoss:
         return self
 
 
+def _calculate_clip_score(
+    clip_metric_obj, denoised_images, target_images, device, zero_tensor
+):
+    if clip_metric_obj is None:
+        return zero_tensor
+    try:
+        clip_metric_obj = clip_metric_obj.to(device)
+        denoised_uint8 = _preprocess_images_for_clip(denoised_images.float())
+        target_uint8 = _preprocess_images_for_clip(target_images.float())
+
+        if not hasattr(clip_metric_obj, "model") or not hasattr(
+            clip_metric_obj, "processor"
+        ):
+            return zero_tensor
+
+        processed_generated = clip_metric_obj.processor(
+            images=denoised_uint8, return_tensors="pt", padding=True
+        ).to(device)
+        processed_target = clip_metric_obj.processor(
+            images=target_uint8, return_tensors="pt", padding=True
+        ).to(device)
+
+        generated_embeddings = clip_metric_obj.model.get_image_features(
+            pixel_values=processed_generated["pixel_values"]
+        )
+        target_embeddings = clip_metric_obj.model.get_image_features(
+            pixel_values=processed_target["pixel_values"]
+        )
+
+        generated_embeddings_norm = F.normalize(generated_embeddings, p=2, dim=-1)
+        target_embeddings_norm = F.normalize(target_embeddings, p=2, dim=-1)
+
+        clip_similarity = (
+            (generated_embeddings_norm * target_embeddings_norm).sum(dim=-1).mean()
+        )
+        return clip_similarity.detach()
+
+    except Exception as e:
+        ic(f"Exception during CLIP score computation: {e}")
+        return zero_tensor
+
+
+def _calculate_fid_score(
+    fid_metric_obj, denoised_images, target_images, device, zero_tensor
+):
+    if fid_metric_obj is None:
+        return zero_tensor
+    try:
+        fid_metric_obj = fid_metric_obj.to(device)
+        # torchmetrics FID with normalize=True expects float32 images in range [0, 1]
+
+        denoised_float32_for_fid = _preprocess_images_for_torchmetrics_fid(
+            denoised_images.float()
+        )
+        target_float32_for_fid = _preprocess_images_for_torchmetrics_fid(
+            target_images.float()
+        )
+
+        fid_metric_obj.update(denoised_float32_for_fid, real=False)
+        fid_metric_obj.update(target_float32_for_fid, real=True)
+        fid_val = fid_metric_obj.compute()
+
+        return fid_val.detach()
+    except Exception as e:
+        ic(f"Exception during FID computation: {e}")
+
+        return zero_tensor
+
+
 def compute_losses(
     noise_pred,
     noise,
@@ -56,8 +136,8 @@ def compute_losses(
     base_scheduler=None,
     perceptual_loss_fn=None,
     ssim_loss_fn=None,
-    clip_score_fn=None,
-    fid_score_fn=None,
+    clip_score_metric_obj=None,
+    fid_metric_obj=None,
     config=None,
 ):
     # noise_loss_per_element = F.mse_loss(noise_pred, noise) # Original line
@@ -149,10 +229,6 @@ def compute_losses(
                 elif scheduler.config.prediction_type == "sample":
                     denoised_latents = noise_pred
                 else:
-                    # Fallback or error for unknown prediction_type
-                    ic(
-                        f"Unknown prediction_type: {scheduler.config.prediction_type}. Using epsilon prediction formula for denoised_latents."
-                    )
                     denoised_latents = (
                         noisy_latents - sqrt_one_minus_alphas_cumprod_t * noise_pred
                     ) / sqrt_alphas_cumprod_t
@@ -184,27 +260,17 @@ def compute_losses(
                     metrics["ssim_value"] = ssim_val
                     metrics["ssim_loss"] = 1.0 - ssim_val
 
-                if clip_score_fn is not None:
-                    try:
-                        clip_val = clip_score_fn(
-                            denoised_images.float(), target_images.float()
-                        ).detach()
-                        metrics["clip_score"] = clip_val
-                    except Exception as e:
-                        ic(f"Exception during CLIP score computation: {e}")
-                else:
-                    ic("clip_score_fn not provided, skipping CLIP score computation.")
+                metrics["clip_score"] = _calculate_clip_score(
+                    clip_score_metric_obj,
+                    denoised_images,
+                    target_images,
+                    device,
+                    zero_tensor,
+                )
 
-                if fid_score_fn is not None:
-                    try:
-                        fid_val = fid_score_fn(
-                            denoised_images.float(), target_images.float()
-                        ).detach()
-                        metrics["fid_score"] = fid_val
-                    except Exception as e:
-                        ic(f"Exception during FID score computation: {e}")
-                else:
-                    ic("fid_score_fn not provided, skipping FID score computation.")
+                metrics["fid_score"] = _calculate_fid_score(
+                    fid_metric_obj, denoised_images, target_images, device, zero_tensor
+                )
 
             except Exception as e:
                 ic(f"Exception during auxiliary metric computation: {e}")
