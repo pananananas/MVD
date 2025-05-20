@@ -19,3 +19,4 @@ objaverse/
 validation_results/
 src/data/cleaning/output_visualizations
 *.ckpt
+config/

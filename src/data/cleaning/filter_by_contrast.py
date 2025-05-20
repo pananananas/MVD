@@ -4,8 +4,6 @@ import os
 import random
 import shutil
 import sqlite3
-import tempfile
-import textwrap
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List
@@ -16,29 +14,38 @@ import numpy as np
 from PIL import Image
 from tqdm import tqdm
 
-# ===== CONFIGURATION =====
+# Local testing:
 # DATASET_PATH = "/Users/ewojcik/Code/pwr/MVD/objaverse/filter_test/renders"
 # REJECTED_SAMPLES_PATH = "/Users/ewojcik/Code/pwr/MVD/objaverse/filter_test/rejected"
 # PROCESSING_QUEUE_PATH = "/Users/ewojcik/Code/pwr/MVD/objaverse/filter_test/queue"
-DATASET_PATH = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/renders_final"
-REJECTED_SAMPLES_PATH = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/rejected"
-PROCESSING_QUEUE_PATH = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/renders"
+
+# Athena:
+DATASET_PATH = (
+    "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/renders_final"
+)
+REJECTED_SAMPLES_PATH = (
+    "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/rejected"
+)
+PROCESSING_QUEUE_PATH = (
+    "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/renders"
+)
+
 os.makedirs(REJECTED_SAMPLES_PATH, exist_ok=True)
 os.makedirs(DATASET_PATH, exist_ok=True)
 
-DB_PATH = os.path.join(os.path.dirname(REJECTED_SAMPLES_PATH), "processing_status.db")
+DB_PATH = os.path.join(
+    os.path.dirname(REJECTED_SAMPLES_PATH), "processing_status_contrast.db"
+)
 
 IMG_SIZE = (1024, 1024)
 NUM_OBJECTS = 100000
 MAX_NUM_VIEWS = 6
 
-# ===== HEURISTIC THRESHOLDS =====
 LOW_CONTRAST_THRESHOLD = 10.0
 VISUALIZE_FILTERING = False
 
 
 def setup_database():
-    """Setup SQLite database to track processing status."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("""
@@ -52,12 +59,6 @@ def setup_database():
     """)
     conn.commit()
     return conn
-
-
-def wrap_text(text, width=50):
-    if not text:
-        return "No text available"
-    return "\n".join(textwrap.wrap(text, width))
 
 
 def get_zip_files(data_path: str, limit: int = None) -> List[str]:
@@ -112,7 +113,6 @@ def load_images_from_zip(
 
 
 def filter_sample(images: List[Image.Image], object_uid: str) -> bool:
-
     if not images:
         print(f"Object {object_uid}: No images provided for filtering.")
         return False
@@ -172,46 +172,6 @@ def filter_sample(images: List[Image.Image], object_uid: str) -> bool:
             plt.show()
 
     return sample_passes_all_checks
-
-
-def add_prompt_to_zip(zip_path: str, prompt_text: str) -> bool:
-    try:
-        temp_dir = tempfile.mkdtemp()
-
-        with zipfile.ZipFile(zip_path, "r") as zip_ref:
-            zip_ref.extractall(temp_dir)
-
-        extracted_dirs = [
-            d for d in os.listdir(temp_dir) if os.path.isdir(os.path.join(temp_dir, d))
-        ]
-        if extracted_dirs:
-            content_dir = os.path.join(temp_dir, extracted_dirs[0])
-            with open(os.path.join(content_dir, "prompt.txt"), "w") as f:
-                f.write(prompt_text)
-        else:
-            with open(os.path.join(temp_dir, "prompt.txt"), "w") as f:
-                f.write(prompt_text)
-
-        temp_zip = os.path.join(temp_dir, "temp.zip")
-        with zipfile.ZipFile(temp_zip, "w") as new_zip:
-            for root, _, files in os.walk(temp_dir):
-                for file in files:
-                    if file == "temp.zip":
-                        continue
-
-                    file_path = os.path.join(root, file)
-                    arcname = os.path.relpath(file_path, temp_dir)
-                    new_zip.write(file_path, arcname)
-
-        shutil.move(temp_zip, zip_path)
-
-        shutil.rmtree(temp_dir)
-        return True
-
-    except Exception:
-        if "temp_dir" in locals() and os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
-        return False
 
 
 def main():

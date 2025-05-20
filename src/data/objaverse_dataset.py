@@ -41,7 +41,7 @@ class ObjaverseDataset(Dataset):
         self.dataset_samples = dataset_samples
         self.rng = random.Random(seed)
 
-        render_dir = self.data_root / "renders"
+        render_dir = self.data_root / "renders_final"
         self.zip_files = sorted(glob.glob(str(render_dir / "*.zip")))
         logger.info(f"Found {len(self.zip_files)} object zip files in {render_dir}")
 
@@ -87,7 +87,9 @@ class ObjaverseDataset(Dataset):
         """Build pairs of source and target views from each object, using a cache if possible."""
 
         dataset_samples_suffix = (
-            f"_max{self.dataset_samples}" if self.dataset_samples is not None else "_all"
+            f"_max{self.dataset_samples}"
+            if self.dataset_samples is not None
+            else "_all"
         )
         cache_filename = f"objaverse_{self.split}_pairs_cache_{self.zip_files_hash}{dataset_samples_suffix}.json"
         cache_path = self.data_root / cache_filename

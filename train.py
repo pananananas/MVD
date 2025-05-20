@@ -57,8 +57,7 @@ def main(config, cuda, resume_from_checkpoint=None):
             )
 
     else:
-        # dataset_path = "/Users/ewojcik/Code/pwr/MVD/objaverse"
-        dataset_path = "/Users/ewojcik/Code/pwr/MVD/objaverse/filter_test/renders"
+        dataset_path = "/Users/ewojcik/Code/pwr/MVD/objaverse"
 
     wandb_run_id = args.wandb_id
 
