@@ -511,6 +511,23 @@ class MVDLightningModule(LightningModule):
             and hasattr(self.logger.experiment, "log")
         ):
             try:
+                current_rank = -1
+                if hasattr(self.trainer, "global_rank"):
+                    current_rank = self.trainer.global_rank
+                elif hasattr(self, "global_rank"):
+                    current_rank = self.global_rank
+
+                log_message_prefix = f"[Rank {current_rank}] _log_wandb_comparison: "
+                log_message_details = (
+                    f"Epoch: {epoch}, Batch_idx: {batch_idx}, "
+                    f"Current self.global_step: {self.global_step}, "
+                    f"Target WandB Key: samples/epoch_{epoch:03d}_batch_{batch_idx:04d}"
+                )
+
+                logger.info(f"{log_message_prefix}{log_message_details}")
+                if current_rank == 0 or current_rank == -1:
+                    print(f"WANDB_DEBUG: {log_message_prefix}{log_message_details}")
+
                 self.logger.experiment.log(
                     {
                         f"samples/epoch_{epoch:03d}_batch_{batch_idx:04d}": [

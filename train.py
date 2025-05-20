@@ -17,7 +17,7 @@ import wandb
 from src.data.objaverse_dataset import ObjaverseDataModule
 from src.models.mvd_unet import create_mvd_pipeline
 from src.training.training import MVDLightningModule
-from src.utils import create_output_dirs
+from src.utils import create_output_dirs, log_debug
 
 lt.monkey_patch()
 
@@ -57,7 +57,8 @@ def main(config, cuda, resume_from_checkpoint=None):
             )
 
     else:
-        dataset_path = "/Users/ewojcik/Code/pwr/MVD/objaverse"
+        # dataset_path = "/Users/ewojcik/Code/pwr/MVD/objaverse"
+        dataset_path = "/Users/ewojcik/Code/pwr/MVD/objaverse/filter_test/renders"
 
     wandb_run_id = args.wandb_id
 
@@ -109,6 +110,10 @@ def main(config, cuda, resume_from_checkpoint=None):
         )
         ic("Starting a new WandB run.")
 
+    dirs = create_output_dirs("outputs")
+    debug_log_file_path = dirs["logs"] / "val_debug_logs.txt"
+    log_debug(debug_log_file_path, config)
+
     data_module = ObjaverseDataModule(
         data_root=dataset_path,
         batch_size=config["batch_size"],
@@ -130,9 +135,6 @@ def main(config, cuda, resume_from_checkpoint=None):
         cache_dir=HUGGINGFACE_CACHE if cuda else None,
         scheduler_config=config.get("scheduler_config"),
     )
-
-    dirs = create_output_dirs("outputs")
-    debug_log_file_path = dirs["logs"] / "val_debug_logs.txt"
 
     _wandb_id_to_save_in_hparams = wandb_run_id
 
