@@ -384,8 +384,8 @@ def create_mvd_pipeline(
     enable_gradient_checkpointing: bool = True,
     use_camera_conditioning: bool = True,
     use_image_conditioning: bool = True,
-    img_ref_scale: float = 0.3,
-    cam_modulation_strength: float = 0.2,
+    img_ref_scale: float = 0.25,
+    cam_modulation_strength: float = 1.0,
     cache_dir=None,
     scheduler_config: Optional[Dict[str, Any]] = None,
 ):
@@ -406,8 +406,8 @@ def create_mvd_pipeline(
     base_scheduler = DDPMScheduler.from_config(pipeline.scheduler.config)
     # pipeline.scheduler = base_scheduler
 
-    shift_mode = scheduler_config.get("shift_noise_mode", "interpolated")
-    shift_scale = scheduler_config.get("shift_noise_scale", 1.0)
+    shift_mode = "interpolated"
+    shift_scale = 6.0
 
     pipeline.scheduler = ShiftSNRScheduler.from_scheduler(
         noise_scheduler=base_scheduler,

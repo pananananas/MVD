@@ -18,9 +18,9 @@ import io
 
 # ===== CONFIGURATION =====
 # DATASET_PATH = "/Users/ewojcik/Code/pwr/MVD/objaverse/renders"
-DATASET_PATH = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/renders"
-REJECTED_SAMPLES_PATH = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/rejected"
-PROCESSING_QUEUE_PATH = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/queue"
+DATASET_PATH = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/gso_rendered/renders_final"
+REJECTED_SAMPLES_PATH = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/gso_rendered/rejected"
+PROCESSING_QUEUE_PATH = "/net/pr2/projects/plgrid/plggtattooai/MeshDatasets/gso_rendered/renders"
 os.makedirs(REJECTED_SAMPLES_PATH, exist_ok=True)
 os.makedirs(DATASET_PATH, exist_ok=True)
 

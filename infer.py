@@ -34,7 +34,7 @@ def main(args):
         use_memory_efficient_attention=True,
         enable_gradient_checkpointing=False,
         dtype=torch.float32,
-        use_camera_conditioning=False,
+        use_camera_conditioning=True,
         use_image_conditioning=True,
         cache_dir=cache_dir,
     )
@@ -162,7 +162,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ref-scale", 
         type=float, 
-        default=0.1, 
+        default=1.0, 
         help="Reference scale"
     )
     parser.add_argument(
@@ -179,3 +179,6 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     main(args)
+
+
+    # /net/pr2/projects/plgrid/plggtattooai/code/eryk/MVD/outputs/checkpoints/model.ckpt

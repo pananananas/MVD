@@ -344,9 +344,48 @@ def load_object(object_path: str) -> None:
         import_function(filepath=object_path, merge_vertices=True)
     elif file_extension == "obj":
         # For OBJ, ensure MTL files are loaded
-        import_function(filepath=object_path, use_materials=True)
+        import_function(filepath=object_path)
     else:
         import_function(filepath=object_path)
+        
+    # --- Apply corrective rotation for GSO standard orientation ---
+    # GSO objects are observed to be oriented with their "top" along Blender's -Y axis.
+    # Rotate by -90 degrees around the X-axis to make them Z-up.
+    
+    bpy.ops.object.select_all(action='DESELECT')
+    objects_to_rotate = []
+    for obj in bpy.data.objects: # Iterate over all objects
+        # Check if the object is a MESH and not a camera or light to avoid rotating those
+        if obj.type == 'MESH':
+            obj.select_set(True) # Select mesh objects
+            objects_to_rotate.append(obj)
+        elif obj.type not in {'CAMERA', 'LIGHT'}: # Also select other relevant object types if any
+            obj.select_set(True)
+            objects_to_rotate.append(obj)
+        else:
+            obj.select_set(False) # Ensure cameras/lights are not selected
+
+    if objects_to_rotate:
+        # Ensure there's an active object if we have selection, needed for operators
+        if bpy.context.view_layer.objects.active is None and objects_to_rotate:
+             bpy.context.view_layer.objects.active = objects_to_rotate[0]
+        
+        debug_print(f"Applying -90deg X-axis corrective rotation to {len(objects_to_rotate)} selected objects.")
+        # Rotate selected objects around the GLOBAL X-axis
+        bpy.ops.transform.rotate(value=math.radians(-90), orient_axis='X', orient_type='GLOBAL', constraint_axis=(True, False, False))
+        
+        # Apply the rotation to make it the new base orientation
+        # Make sure all objects to rotate are selected before applying transform
+        bpy.ops.object.select_all(action='DESELECT')
+        for obj_to_apply in objects_to_rotate:
+            obj_to_apply.select_set(True)
+        if objects_to_rotate: # Ensure active object is set if any selected
+            bpy.context.view_layer.objects.active = objects_to_rotate[0]
+            bpy.ops.object.transform_apply(location=False, rotation=True, scale=False)
+            debug_print(f"Corrective rotation applied and baked for selected objects.")
+    else:
+        debug_print("No suitable objects found to apply corrective rotation.")
+    # --- End corrective rotation ---
         
     # After importing, print info about materials for debugging
     print(f"Loaded object with {len(bpy.data.materials)} materials")

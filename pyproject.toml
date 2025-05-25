@@ -39,6 +39,7 @@ dependencies = [
     "wandb>=0.19.6",
     "opencv-python>=4.11.0.86",
     "ipykernel>=6.29.5",
+    "lpips>=0.1.4",
 ]
 
 [dependency-groups]
