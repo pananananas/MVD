@@ -76,9 +76,6 @@ class MVDPipeline(StableDiffusionPipeline):
             uncond_embeddings = None
             
         if guidance_scale > 1.0 and uncond_embeddings is not None:
-            logger.info(f"Classifier-free guidance enabled with scale {guidance_scale}")
-            logger.info(f"Uncond embeddings shape: {uncond_embeddings.shape}")
-            logger.info(f"Prompt embeddings shape: {prompt_embeds.shape}")
             prompt_embeds = torch.cat([uncond_embeddings, prompt_embeds])
             log_debug(debug_log_file_path, f"  CFG Enabled: Combined prompt_embeds shape: {prompt_embeds.shape}")
             
@@ -125,15 +122,12 @@ class MVDPipeline(StableDiffusionPipeline):
         extra_kwargs = {}
         log_debug(debug_log_file_path, "  Preparing extra_kwargs for UNet:")
         if source_camera is not None:
-            logger.info(f"Source camera shape before device move: {source_camera.shape}")
             extra_kwargs["source_camera"] = source_camera.to(self.device)
             log_debug(debug_log_file_path, f"    Added source_camera shape: {extra_kwargs['source_camera'].shape}")
         if target_camera is not None:
-            logger.info(f"Target camera shape before device move: {target_camera.shape}")
             extra_kwargs["target_camera"] = target_camera.to(self.device)
             log_debug(debug_log_file_path, f"    Added target_camera shape: {extra_kwargs['target_camera'].shape}")
         if source_image_latents is not None:
-            logger.info(f"Source image latents shape: {source_image_latents.shape}")
             extra_kwargs["source_image_latents"] = source_image_latents
             log_debug(debug_log_file_path, f"    Added source_image_latents shape: {extra_kwargs['source_image_latents'].shape}")
         

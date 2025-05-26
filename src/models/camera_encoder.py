@@ -70,10 +70,6 @@ class CameraEncoder(nn.Module):
 
         self._current_modulation_stats = {}
 
-        logger.info(
-            f"CameraEncoder initialized with modulation_strength={modulation_strength}"
-        )
-
     def init_modulators(self):
         for name, modulator in self.modulators.items():
             if isinstance(modulator, nn.Sequential):
