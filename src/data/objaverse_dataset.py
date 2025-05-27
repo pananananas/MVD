@@ -35,56 +35,65 @@ class ObjaverseDataset(Dataset):
         super().__init__()
         self.data_root = Path(data_root)
         self.split = split
+        self._split_ratio_arg = split_ratio  # Store for load_state_dict
         self.transform = transform
         self.target_size = target_size
         self.max_views_per_object = max_views_per_object
         self.dataset_samples = dataset_samples
-        self.rng = random.Random(seed)
+        self.seed = seed
+        self.rng = random.Random(self.seed)
 
         render_dir = self.data_root / "renders_final"
-        self.zip_files = sorted(glob.glob(str(render_dir / "*.zip")))
-        logger.info(f"Found {len(self.zip_files)} object zip files in {render_dir}")
+        # Fetch all zips first, don't assign to self.zip_files yet
+        # This list should remain constant unless underlying file system changes.
+        self._initial_all_zip_files_on_disk = sorted(glob.glob(str(render_dir / "*.zip")))
+        logger.info(f"Found {len(self._initial_all_zip_files_on_disk)} total object zip files in {render_dir}")
 
-        self._split_dataset(split_ratio)
+        # _split_dataset will populate self.zip_files and self.zip_files_hash
+        # It uses self.rng, which is now initialized.
+        self._split_dataset(self._initial_all_zip_files_on_disk, self._split_ratio_arg)
 
         self.view_pairs = []
-
+        # _build_view_pairs uses self.rng and self.zip_files (set by _split_dataset)
         self._build_view_pairs()
+        ic(f"ObjaverseDataset ({split}): Initialization complete. {len(self.view_pairs)=}")
 
-    def _split_dataset(self, split_ratio: Tuple[float, float, float]) -> None:
+    def _split_dataset(self, all_zips_input_list: list, split_ratio: Tuple[float, float, float]) -> None:
         """Split the dataset into train/val/test based on the provided ratio."""
+        ic(f"ObjaverseDataset ({self.split}): Running _split_dataset.")
         assert sum(split_ratio) == 1.0, "Split ratios must sum to 1.0"
 
-        # Generate a unique hash for the current list of zip files to invalidate cache if files change
-        zip_list_str = "".join(sorted(self.zip_files))
-        try:
-            import hashlib
+        # Work on a copy of the input list for shuffling
+        all_zips_shuffled = list(all_zips_input_list) # Make a copy to shuffle
+        self.rng.shuffle(all_zips_shuffled) # Shuffle the copy using self.rng
 
-            self.zip_files_hash = hashlib.md5(zip_list_str.encode()).hexdigest()
-        except ImportError:
-            self.zip_files_hash = str(
-                hash(zip_list_str)
-            )  # Fallback if hashlib is not available
-
-        all_zips = self.zip_files.copy()
-        self.rng.shuffle(all_zips)
-
-        train_end = int(len(all_zips) * split_ratio[0])
-        val_end = train_end + int(len(all_zips) * split_ratio[1])
+        train_end = int(len(all_zips_shuffled) * split_ratio[0])
+        val_end = train_end + int(len(all_zips_shuffled) * split_ratio[1])
 
         if self.split == "train":
-            self.zip_files = all_zips[:train_end]
+            self.zip_files = all_zips_shuffled[:train_end]
         elif self.split == "val":
-            self.zip_files = all_zips[train_end:val_end]
+            self.zip_files = all_zips_shuffled[train_end:val_end]
         elif self.split == "test":
-            self.zip_files = all_zips[val_end:]
+            self.zip_files = all_zips_shuffled[val_end:]
         else:
             raise ValueError(f"Unknown split: {self.split}")
 
-        logger.info(f"Using {len(self.zip_files)} objects for {self.split} split")
+        # Generate a unique hash for the *split-specific* list of zip files
+        # This hash is used for caching view_pairs for this specific split and dataset configuration
+        zip_list_str = "".join(sorted(self.zip_files))
+        try:
+            import hashlib
+            self.zip_files_hash = hashlib.md5(zip_list_str.encode()).hexdigest()
+        except ImportError:
+            self.zip_files_hash = str(hash(zip_list_str))
+
+        logger.info(f"Using {len(self.zip_files)} objects for {self.split} split (hash: {self.zip_files_hash})")
+        ic(f"ObjaverseDataset ({self.split}): _split_dataset complete. {len(self.zip_files)=}, hash: {self.zip_files_hash}")
 
     def _build_view_pairs(self) -> None:
         """Build pairs of source and target views from each object, using a cache if possible."""
+        ic(f"ObjaverseDataset ({self.split}): Running _build_view_pairs. {self.dataset_samples=}")
 
         dataset_samples_suffix = (
             f"_max{self.dataset_samples}"
@@ -290,6 +299,43 @@ class ObjaverseDataset(Dataset):
             camera_data = np.load(io.BytesIO(f.read()))
             return camera_data
 
+    def state_dict(self):
+        ic(f"ObjaverseDataset ({self.split}): Saving state...")
+        state = {"rng_state": self.rng.getstate()}
+        ic(f"ObjaverseDataset ({self.split}): RNG state saved.")
+        return state
+
+    def load_state_dict(self, state_dict):
+        ic(f"ObjaverseDataset ({self.split}): Loading state...")
+        self.rng.setstate(state_dict["rng_state"])
+        ic(f"ObjaverseDataset ({self.split}): RNG state restored.")
+
+        # Re-run dataset construction logic that depends on RNG
+        ic(f"ObjaverseDataset ({self.split}): Re-initializing split and view pairs post RNG state load.")
+        
+        # It's crucial that _initial_all_zip_files_on_disk reflects the true state of discoverable files
+        # If files changed on disk, this list would be different. For typical SLURM restarts, it should be the same.
+        # Re-fetch it to be safe, though it was stored in __init__
+        render_dir = self.data_root / "renders_final"
+        current_all_zip_files_on_disk = sorted(glob.glob(str(render_dir / "*.zip")))
+        if len(current_all_zip_files_on_disk) != len(self._initial_all_zip_files_on_disk):
+            logger.warning(f"ObjaverseDataset ({self.split}): Number of zip files on disk changed between initial setup and load_state_dict. "
+                           f"Initial: {len(self._initial_all_zip_files_on_disk)}, Current: {len(current_all_zip_files_on_disk)}")
+            # Potentially update self._initial_all_zip_files_on_disk if this is desired behavior,
+            # but for strict resumability, using the original list might be preferred if it's guaranteed to exist.
+            # For now, use the current state from disk for re-splitting.
+            self._initial_all_zip_files_on_disk = current_all_zip_files_on_disk
+
+
+        # Re-apply the split logic using the restored RNG and the (potentially updated) full list of zips
+        self._split_dataset(self._initial_all_zip_files_on_disk, self._split_ratio_arg)
+        
+        # Re-build view pairs, which also uses self.rng and the now correctly set self.zip_files
+        self.view_pairs = [] # Clear any old/partially built pairs
+        self._build_view_pairs() 
+        
+        ic(f"ObjaverseDataset ({self.split}): Re-initialization complete after loading state. {len(self.view_pairs)=}")
+
 
 class ObjaverseDataModule(pl.LightningDataModule):
     def __init__(
@@ -314,8 +360,10 @@ class ObjaverseDataModule(pl.LightningDataModule):
         self.dataset_samples = dataset_samples
 
         self.transform = None
+        ic(f"ObjaverseDataModule: Initialized with data_root={data_root}, batch_size={batch_size}, dataset_samples={dataset_samples}")
 
     def setup(self, stage: Optional[str] = None):
+        ic(f"ObjaverseDataModule: setup(stage='{stage}') called.")
         if stage == "fit" or stage is None:
             self.train_dataset = ObjaverseDataset(
                 data_root=self.data_root,
@@ -350,6 +398,7 @@ class ObjaverseDataModule(pl.LightningDataModule):
                 seed=self.seed,
                 dataset_samples=self.dataset_samples,
             )
+        ic(f"ObjaverseDataModule: setup complete. Train: {hasattr(self, 'train_dataset')}, Val: {hasattr(self, 'val_dataset')}, Test: {hasattr(self, 'test_dataset')}")
 
     def train_dataloader(self):
         return DataLoader(
@@ -380,6 +429,53 @@ class ObjaverseDataModule(pl.LightningDataModule):
             pin_memory=True,
             persistent_workers=True,
         )
+
+    def state_dict(self):
+        ic("ObjaverseDataModule: Saving state...")
+        state = {}
+        if hasattr(self, 'train_dataset') and self.train_dataset is not None:
+            state['train_dataset_state'] = self.train_dataset.state_dict()
+            ic("ObjaverseDataModule: train_dataset state included.")
+        if hasattr(self, 'val_dataset') and self.val_dataset is not None:
+            state['val_dataset_state'] = self.val_dataset.state_dict()
+            ic("ObjaverseDataModule: val_dataset state included.")
+        if hasattr(self, 'test_dataset') and self.test_dataset is not None:
+            state['test_dataset_state'] = self.test_dataset.state_dict()
+            ic("ObjaverseDataModule: test_dataset state included.")
+        
+        if not state:
+            ic("ObjaverseDataModule: No dataset states to save (datasets might not be setup).")
+        else:
+            ic(f"ObjaverseDataModule: State saved with keys: {list(state.keys())}")
+        return state
+
+    def load_state_dict(self, state_dict):
+        ic("ObjaverseDataModule: Loading state...")
+        loaded_any = False
+        if hasattr(self, 'train_dataset') and self.train_dataset is not None and 'train_dataset_state' in state_dict:
+            ic("ObjaverseDataModule: Loading state for train_dataset.")
+            self.train_dataset.load_state_dict(state_dict['train_dataset_state'])
+            loaded_any = True
+        elif 'train_dataset_state' in state_dict:
+            ic("ObjaverseDataModule: train_dataset_state found in state_dict, but train_dataset not initialized in module.")
+        
+        if hasattr(self, 'val_dataset') and self.val_dataset is not None and 'val_dataset_state' in state_dict:
+            ic("ObjaverseDataModule: Loading state for val_dataset.")
+            self.val_dataset.load_state_dict(state_dict['val_dataset_state'])
+            loaded_any = True
+        elif 'val_dataset_state' in state_dict:
+            ic("ObjaverseDataModule: val_dataset_state found in state_dict, but val_dataset not initialized in module.")
+
+        if hasattr(self, 'test_dataset') and self.test_dataset is not None and 'test_dataset_state' in state_dict:
+            ic("ObjaverseDataModule: Loading state for test_dataset.")
+            self.test_dataset.load_state_dict(state_dict['test_dataset_state'])
+            loaded_any = True
+        elif 'test_dataset_state' in state_dict:
+            ic("ObjaverseDataModule: test_dataset_state found in state_dict, but test_dataset not initialized in module.")
+            
+        if not loaded_any:
+            ic("ObjaverseDataModule: No dataset states were loaded (or datasets not setup).")
+        ic("ObjaverseDataModule: State loading process complete.")
 
 
 def visualize_sample(sample):

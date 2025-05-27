@@ -96,7 +96,7 @@ def main(config, cuda, resume_from_checkpoint=None):
         wandb_logger = WandbLogger(
             project="mvd",
             config=config,
-            log_model=True,
+            log_model=False,  # DONT SAVE THE CHECKPOINTS TO WANDB DASHBOARD
             id=wandb_run_id,
             resume="must",  # or "allow"
         )
@@ -105,7 +105,7 @@ def main(config, cuda, resume_from_checkpoint=None):
         wandb_logger = WandbLogger(
             project="mvd",
             config=config,
-            log_model=True,
+            log_model=False,  # DONT SAVE THE CHECKPOINTS TO WANDB DASHBOARD
         )
         ic("Starting a new WandB run.")
 
