@@ -158,7 +158,7 @@ def main(config, cuda, resume_from_checkpoint=None):
         every_n_train_steps=1000,
     )
 
-    timer_callback = Timer(duration={"hours": 47}, interval="step")
+    timer_callback = Timer(duration={"hours": 147}, interval="step")
 
     callbacks = [
         checkpoint_callback,

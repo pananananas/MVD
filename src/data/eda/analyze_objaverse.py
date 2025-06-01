@@ -44,10 +44,12 @@ def get_all_zip_files(data_path: str, max_samples: int | None = None) -> list[st
         return []
 
     if max_samples and len(all_zip_files) > max_samples:
-        logging.info(f"Sampling {max_samples} files from {len(all_zip_files)} total files.")
-        random.seed(42) # for reproducibility
+        logging.info(
+            f"Sampling {max_samples} files from {len(all_zip_files)} total files."
+        )
+        random.seed(42)  # for reproducibility
         return random.sample(all_zip_files, max_samples)
-    
+
     return all_zip_files
 
 

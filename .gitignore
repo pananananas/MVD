@@ -20,3 +20,7 @@ validation_results/
 src/data/cleaning/output_visualizations
 *.ckpt
 config/
+src/data/eda/objaverse_eda_results.csv
+src/data/eda/objaverse_lda_topics.csv
+src/data/eda/objaverse_ydata_profile.html
+src/data/eda/objaverse_visualizations/
