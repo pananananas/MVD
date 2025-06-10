@@ -5,6 +5,7 @@ import logging
 import os
 from pathlib import Path, PosixPath
 from typing import Dict, List
+import time
 
 import lovely_tensors as lt
 import lpips
@@ -13,7 +14,7 @@ import torch
 import yaml
 
 # from icecream import ic
-from PIL import Image
+from PIL import Image, ImageDraw
 from pytorch_msssim import SSIM
 from torch.utils.data import DataLoader
 from torchmetrics.image import FrechetInceptionDistance, PeakSignalNoiseRatio
@@ -227,6 +228,9 @@ def setup_pipeline(config: Dict, checkpoint_path: str, device: str):
             use_image_conditioning=config["use_image_conditioning"],
             img_ref_scale=config["img_ref_scale"],
             cam_modulation_strength=config["cam_modulation_strength"],
+            cam_output_dim=config["cam_output_dim"],
+            cam_hidden_dim=config["cam_hidden_dim"],
+            simple_cam_encoder=config["simple_encoder"],
             cache_dir=cache_dir,
             scheduler_config=config.get("scheduler_config", {}),
         )
@@ -324,6 +328,7 @@ def run_validation(
                 if target_camera is not None:
                     target_camera = target_camera.to(device)
 
+                inference_start_time = time.perf_counter()
                 pipeline_output = pipeline(
                     prompt=prompts,
                     num_inference_steps=config["num_inference_steps"],
@@ -336,18 +341,28 @@ def run_validation(
                     use_camera_embeddings=config["use_camera_conditioning"],
                     use_image_conditioning=config["use_image_conditioning"],
                 )
+                inference_end_time = time.perf_counter()
+                current_batch_inference_time = inference_end_time - inference_start_time
+                num_samples_in_batch = len(object_uids)
+                logger.info(f"Batch {batch_idx} inference time: {current_batch_inference_time:.4f} seconds for {num_samples_in_batch} samples.")
 
                 generated_images = pipeline_output["images"]
                 generated_images = (generated_images * 2.0 - 1.0).to(device)
-
+                
                 batch_metrics_dict = metrics_calculator.calculate_metrics(
                     generated_images, target_images, prompts
                 )
+                batch_metrics_dict['batch_inference_time_seconds'] = current_batch_inference_time
+                batch_metrics_dict['num_samples_in_batch'] = num_samples_in_batch
+
+
+                per_sample_inference_time = current_batch_inference_time / num_samples_in_batch if num_samples_in_batch > 0 else 0
 
                 for i in range(len(object_uids)):
                     sample_metrics = {}
+                    sample_metrics['inference_time_seconds'] = per_sample_inference_time
                     for metric_name, metric_value in batch_metrics_dict.items():
-                        if metric_name != "clip_score":
+                        if metric_name not in ["clip_score", 'batch_inference_time_seconds', 'num_samples_in_batch']:
                             if (
                                 metric_name == "psnr"
                                 and metrics_calculator.psnr is not None
@@ -397,16 +412,17 @@ def run_validation(
                         }
                     )
 
-                batch_metrics.append(batch_metrics_dict)
-
                 save_sample_images(
-                    source_images,
-                    target_images,
-                    generated_images,
-                    object_uids,
-                    output_dir,
-                    batch_idx,
+                    source_image_tensor=source_images[i],
+                    target_image_tensor=target_images[i],
+                    generated_image_tensor=generated_images[i],
+                    object_uid=object_uids[i],
+                    metrics=sample_metrics,
+                    output_dir=output_dir,
+                    batch_idx=batch_idx,
                 )
+
+                batch_metrics.append(batch_metrics_dict)
 
             except Exception as e:
                 logger.error(f"Error processing batch {batch_idx}: {e}")
@@ -422,7 +438,13 @@ def run_validation(
 
 
 def save_sample_images(
-    source_images, target_images, generated_images, object_uids, output_dir, batch_idx
+    source_image_tensor: torch.Tensor,
+    target_image_tensor: torch.Tensor,
+    generated_image_tensor: torch.Tensor,
+    object_uid: str,
+    metrics: Dict[str, float],
+    output_dir: Path,
+    batch_idx: int,
 ):
     samples_dir = output_dir / "samples"
     samples_dir.mkdir(exist_ok=True, parents=True)
@@ -431,24 +453,42 @@ def save_sample_images(
         img = ((tensor.cpu().permute(1, 2, 0) + 1) / 2 * 255).numpy().astype("uint8")
         return Image.fromarray(img)
 
-    if len(source_images) > 0:
+    try:
+        source_pil = tensor_to_pil(source_image_tensor)
+        target_pil = tensor_to_pil(target_image_tensor)
+        generated_pil = tensor_to_pil(generated_image_tensor)
+
+        total_width = source_pil.width + target_pil.width + generated_pil.width
+        max_height = source_pil.height
+
+        lpips_val = metrics.get("lpips", 0.0)
+        psnr_val = metrics.get("psnr", 0.0)
+        ssim_val = metrics.get("ssim", 0.0)
+        
+        header_text = f"UID: {object_uid} | LPIPS: {lpips_val:.3f} | PSNR: {psnr_val:.2f} | SSIM: {ssim_val:.3f}"
+        
+        header_height = 30
+        final_image_height = max_height + header_height
+
+        comparison_img = Image.new("RGB", (total_width, final_image_height), (255, 255, 255))
+        draw = ImageDraw.Draw(comparison_img)
+
         try:
-            source_pil = tensor_to_pil(source_images[0])
-            target_pil = tensor_to_pil(target_images[0])
-            generated_pil = tensor_to_pil(generated_images[0])
+            draw.text((10, 5), header_text, fill="black")
+        except Exception as font_e:
+            logger.warning(f"Failed to draw text on image for UID {object_uid} (batch {batch_idx}): {font_e}. Text was: '{header_text}'")
+            draw.text((10,5), f"UID: {object_uid} (Metrics text render error)", fill="black")
 
-            total_width = source_pil.width + target_pil.width + generated_pil.width
-            max_height = max(source_pil.height, target_pil.height, generated_pil.height)
-            comparison = Image.new("RGB", (total_width, max_height))
+        # Paste the images below the header
+        comparison_img.paste(source_pil, (0, header_height))
+        comparison_img.paste(target_pil, (source_pil.width, header_height))
+        comparison_img.paste(generated_pil, (source_pil.width + target_pil.width, header_height))
 
-            comparison.paste(source_pil, (0, 0))
-            comparison.paste(target_pil, (source_pil.width, 0))
-            comparison.paste(generated_pil, (source_pil.width + target_pil.width, 0))
+        filename = f"comparison_batch{batch_idx:04d}_uid_{object_uid}.png"
+        comparison_img.save(samples_dir / filename)
 
-            comparison.save(samples_dir / f"batch_{batch_idx:04d}_{object_uids[0]}.png")
-
-        except Exception as e:
-            logger.warning(f"Failed to save sample images for batch {batch_idx}: {e}")
+    except Exception as e:
+        logger.warning(f"Failed to save sample comparison image for UID {object_uid}, batch {batch_idx}: {e}")
 
 
 def calculate_overall_metrics(
@@ -459,7 +499,7 @@ def calculate_overall_metrics(
 
     aggregated = {}
     for metric_name in batch_metrics[0].keys():
-        if metric_name != "clip_score":
+        if metric_name not in ["clip_score", 'batch_inference_time_seconds', 'num_samples_in_batch']:
             values = [
                 batch[metric_name]
                 for batch in batch_metrics
@@ -478,6 +518,32 @@ def calculate_overall_metrics(
     if valid_clip_scores:
         aggregated["clip_score_mean"] = np.mean(valid_clip_scores)
         aggregated["clip_score_std"] = np.std(valid_clip_scores)
+
+    all_batch_inference_times = [b['batch_inference_time_seconds'] for b in batch_metrics if 'batch_inference_time_seconds' in b]
+    num_samples_per_batch_list = [b['num_samples_in_batch'] for b in batch_metrics if 'num_samples_in_batch' in b]
+
+    if all_batch_inference_times:
+        aggregated['mean_batch_inference_time_seconds'] = np.mean(all_batch_inference_times)
+        aggregated['std_batch_inference_time_seconds'] = np.std(all_batch_inference_times)
+        aggregated['min_batch_inference_time_seconds'] = np.min(all_batch_inference_times)
+        aggregated['max_batch_inference_time_seconds'] = np.max(all_batch_inference_times)
+        
+        total_inference_duration = np.sum(all_batch_inference_times)
+        aggregated['total_inference_duration_seconds'] = total_inference_duration
+        
+        total_samples_processed = np.sum(num_samples_per_batch_list)
+        aggregated['total_samples_processed_in_inference'] = total_samples_processed
+        
+        if total_samples_processed > 0:
+            aggregated['avg_per_sample_inference_time_seconds'] = total_inference_duration / total_samples_processed
+        else:
+            aggregated['avg_per_sample_inference_time_seconds'] = 0.0
+    else:
+        aggregated['mean_batch_inference_time_seconds'] = 0.0
+        aggregated['total_inference_duration_seconds'] = 0.0
+        aggregated['total_samples_processed_in_inference'] = 0.0
+        aggregated['avg_per_sample_inference_time_seconds'] = 0.0
+
 
     return aggregated
 
@@ -566,3 +632,6 @@ def main():
 
 if __name__ == "__main__":
     exit(main())
+
+
+# uv run val.py --ckpt /net/pr2/projects/plgrid/plggtattooai/code/eryk/MVD/outputs/2025-06-05_00-20-32/checkpoints/last.ckpt --dataset-path /net/pr2/projects/plgrid/plggtattooai/MeshDatasets/objaverse/

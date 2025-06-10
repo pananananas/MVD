@@ -28,14 +28,20 @@ class MultiViewUNet(nn.Module):
         enable_gradient_checkpointing: bool = True,
         img_ref_scale: float = 0.3,
         cam_modulation_strength: float = 0.2,
+        cam_output_dim: int = 1024,
+        cam_hidden_dim: int = 512,
         use_camera_conditioning: bool = True,
         use_image_conditioning: bool = True,
+        simple_cam_encoder: bool = False,
     ):
         super().__init__()
 
         use_memory_efficient_attention = True
         self.use_camera_conditioning = use_camera_conditioning
         self.use_image_conditioning = use_image_conditioning
+        self.cam_output_dim = cam_output_dim
+        self.cam_hidden_dim = cam_hidden_dim
+        self.simple_cam_encoder = simple_cam_encoder
 
         self.base_unet = UNet2DConditionModel.from_pretrained(
             pretrained_model_name_or_path,
@@ -75,9 +81,11 @@ class MultiViewUNet(nn.Module):
 
         if self.use_camera_conditioning:
             self.camera_encoder = CameraEncoder(
-                output_dim=1024,
+                output_dim=self.cam_output_dim,
+                hidden_dim=self.cam_hidden_dim,
                 modulation_hidden_dims=modulation_hidden_dims,
                 modulation_strength=cam_modulation_strength,
+                simple_encoder=self.simple_cam_encoder,
             ).to(device=self.device, dtype=self.dtype)
         else:
             self.camera_encoder = None
@@ -386,6 +394,9 @@ def create_mvd_pipeline(
     use_image_conditioning: bool = True,
     img_ref_scale: float = 0.25,
     cam_modulation_strength: float = 1.0,
+    cam_output_dim: int = 1024,
+    cam_hidden_dim: int = 512,
+    simple_cam_encoder: bool = False,
     cache_dir=None,
     scheduler_config: Optional[Dict[str, Any]] = None,
 ):
@@ -416,7 +427,6 @@ def create_mvd_pipeline(
         scheduler_class=DDPMScheduler,
     )
 
-
     pipeline.safety_checker = None
     pipeline.feature_extractor = None
 
@@ -427,6 +437,9 @@ def create_mvd_pipeline(
         enable_gradient_checkpointing=enable_gradient_checkpointing,
         img_ref_scale=img_ref_scale,
         cam_modulation_strength=cam_modulation_strength,
+        cam_output_dim=cam_output_dim,
+        cam_hidden_dim=cam_hidden_dim,
+        simple_cam_encoder=simple_cam_encoder,
         use_camera_conditioning=use_camera_conditioning,
         use_image_conditioning=use_image_conditioning,
     )

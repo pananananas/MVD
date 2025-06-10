@@ -42,6 +42,11 @@ use_camera_conditioning: true
 use_image_conditioning: true
 train_denoising_unet: false
 
+# Camera encoder parameters
+cam_output_dim: 1024
+cam_hidden_dim: 512
+simple_encoder: false
+
 # Logging parameters
 modulation_log_interval: 5
 

@@ -37,6 +37,9 @@ def main(args):
         dtype=torch.float32,
         use_camera_conditioning=True,
         use_image_conditioning=True,
+        # cam_output_dim=2048,
+        # cam_hidden_dim=1024,
+        simple_cam_encoder=False,
         cache_dir=cache_dir,
     )
 

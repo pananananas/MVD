@@ -131,6 +131,9 @@ def main(config, cuda, resume_from_checkpoint=None):
         use_image_conditioning=config.get("use_image_conditioning"),
         img_ref_scale=config.get("img_ref_scale", 0.3),
         cam_modulation_strength=config.get("cam_modulation_strength", 0.2),
+        cam_output_dim=config.get("cam_output_dim", 1024),
+        cam_hidden_dim=config.get("cam_hidden_dim", 512),
+        simple_cam_encoder=config.get("simple_encoder", False),
         cache_dir=HUGGINGFACE_CACHE if cuda else None,
         scheduler_config=config.get("scheduler_config"),
     )

@@ -13,35 +13,55 @@ class CameraEncoder(nn.Module):
     def __init__(
         self,
         output_dim: int = 768,
+        hidden_dim: int = 512,
         max_freq: int = 10,
         modulation_hidden_dims: Dict[str, int] = None,
         modulation_strength: float = 1.0,
+        simple_encoder: bool = False,
     ):
         super().__init__()
         self.output_dim = output_dim
+        self.hidden_dim = hidden_dim
         self.max_freq = max_freq
+        self.simple_encoder = simple_encoder
 
         self.pos_enc_dim = (output_dim // 2) // 3
 
-        self.rotation_encoder = nn.Sequential(
-            nn.Linear(9, 512),  # flattened rotation matrix
-            nn.LayerNorm(512),
-            nn.SiLU(),
-            nn.Linear(512, 512),
-            nn.LayerNorm(512),
-            nn.SiLU(),
-            nn.Linear(512, output_dim),
-        )
+        if not simple_encoder:
+            self.rotation_encoder = nn.Sequential(
+                nn.Linear(9, hidden_dim),  # flattened rotation matrix
+                nn.LayerNorm(hidden_dim),
+                nn.SiLU(),
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.LayerNorm(hidden_dim),
+                nn.SiLU(),
+                nn.Linear(hidden_dim, output_dim),
+            )
 
-        self.translation_encoder = nn.Sequential(
-            nn.Linear(output_dim, 512),
-            nn.LayerNorm(512),
-            nn.SiLU(),
-            nn.Linear(512, 512),
-            nn.LayerNorm(512),
-            nn.SiLU(),
-            nn.Linear(512, output_dim),
-        )
+            self.translation_encoder = nn.Sequential(
+                nn.Linear(output_dim, hidden_dim),
+                nn.LayerNorm(hidden_dim),
+                nn.SiLU(),
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.LayerNorm(hidden_dim),
+                nn.SiLU(),
+                nn.Linear(hidden_dim, output_dim),
+            )
+            
+        else:
+            self.rotation_encoder = nn.Sequential(
+                nn.Linear(9, hidden_dim),  # flattened rotation matrix
+                nn.LayerNorm(hidden_dim),
+                nn.SiLU(),
+                nn.Linear(hidden_dim, output_dim),
+            )
+
+            self.translation_encoder = nn.Sequential(
+                nn.Linear(output_dim, hidden_dim),
+                nn.LayerNorm(hidden_dim),
+                nn.SiLU(),
+                nn.Linear(hidden_dim, output_dim),
+            )
 
         self.final_projection = nn.Sequential(
             nn.Linear(2 * output_dim, output_dim),
