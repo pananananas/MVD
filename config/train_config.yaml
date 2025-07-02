@@ -14,7 +14,7 @@ cam_modulation_strength: 1.0
 
 # Training parameters
 learning_rate: 0.00001
-dataset_samples: 20000 # null for full dataset
+dataset_samples: null # null for full dataset
 epochs: 25
 
 num_gpus: 4
