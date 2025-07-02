@@ -32,12 +32,6 @@ run inference:
 uv run infer.py --checkpoint path/to/checkpoint.ckpt
 ```
 
-# TODOs
-
-- [ ] FiLM layers experiments setup
-- [ ] add dropout to conditioning
-- [ ] add option to use learnable parameter for img_ref_scale and cam_modulation_strength
-
 <!--
 # Plan działania
 
